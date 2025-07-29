@@ -1,0 +1,40 @@
+[tool.poetry]
+name = "agentic-rag-system"
+version = "0.1.0"
+description = "A production-grade agentic RAG system."
+authors = ["Harshad Lohande <lohande.harshad@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "3.12.*"
+pypdf = "^5.8.0"
+python-docx = "^1.2.0"
+langchain = "^0.3.27"
+sentence-transformers = "^5.0.0"
+langchain-weaviate = "^0.0.5"
+langchain-huggingface = "^0.3.1"
+langchain-community = "^0.3.27"
+weaviate-client = "^4.16.4"
+python-dotenv = "^1.1.1"
+pydantic-settings = "^2.10.1"
+langchain-openai = "^0.3.28"
+fastapi = "^0.116.1"
+uvicorn = "^0.35.0"
+streamlit = "^1.47.1"
+requests = "^2.32.4"
+pydantic = "^2.11.7"
+langgraph = "^0.6.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.1"
+pytest-mock = "^3.14.1"
+fpdf = "^1.7.2"
+httpx = "^0.28.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
