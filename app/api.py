@@ -1,51 +1,75 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage
+from app.agentic_workflow import GraphState, retrieve_documents, generate_answer
+from langgraph.checkpoint.memory import InMemorySaver
+import uuid
 
-from app.retriever import create_retriever
-from app.rag_chain import create_rag_chain
-
-# Use a lifespan event handler to load the model once at startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("--- Loading model and retriever at startup ---")
-    retriever, client = create_retriever()
-    app.state.rag_chain = create_rag_chain(retriever)
-    app.state.weaviate_client = client
+    print("--- Building and compiling LangGraph app at startup ---")
+    
+    workflow = StateGraph(GraphState)
+
+    workflow.add_node("retrieve", retrieve_documents)
+    workflow.add_node("generate", generate_answer)
+
+    workflow.set_entry_point("retrieve")
+    workflow.add_edge("retrieve", "generate")
+    workflow.add_edge("generate", END)
+
+    # --- Add a memory checkpointer ---
+    memory = InMemorySaver()
+
+    app.state.langgraph_app = workflow.compile(checkpointer=memory)
+    
+    print("--- LangGraph app compiled successfully ---")
     yield
-    # Clean up the models and connections
-    print("--- Closing Weaviate connection at shutdown ---")
-    if app.state.weaviate_client and app.state.weaviate_client.is_connected():
-        app.state.weaviate_client.close()
+    print("--- Application shutdown ---")
+
 
 app = FastAPI(lifespan=lifespan)
 
-# Pydantic models for request and response
 class QueryRequest(BaseModel):
     query: str
+    session_id: str | None = None
 
+# --- Re-introduce token fields to the response model ---
 class QueryResponse(BaseModel):
     answer: str
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    session_id: str
 
 @app.post("/query", response_model=QueryResponse)
 async def query_endpoint(request: QueryRequest):
-    """Receives a query and returns a grounded answer with token stats."""
-    rag_chain = app.state.rag_chain
+    """Receives a query and returns a grounded answer using the LangGraph workflow."""
+    langgraph_app = app.state.langgraph_app
 
-    response = rag_chain.invoke(request.query)
+    # --- Use the provided session_id or generate a new one ---
+    session_id = request.session_id or str(uuid.uuid4())
+    
+    inputs = {"messages": [HumanMessage(content=request.query)]}
 
-    answer = response.content
-    token_usage = response.response_metadata.get('token_usage', {})
+    # Pass the thread ID to the invoke call
+    config = {"configurable": {"thread_id": session_id}}
 
+    final_state = langgraph_app.invoke(inputs, config=config)
+    
+    answer = final_state['messages'][-1].content
+    
+    # --- Extract token counts from the final state ---
     return QueryResponse(
         answer=answer,
-        prompt_tokens=token_usage.get('prompt_tokens', 0),
-        completion_tokens=token_usage.get('completion_tokens', 0),
-        total_tokens=token_usage.get('total_tokens', 0)
+        prompt_tokens=final_state['prompt_tokens'],
+        completion_tokens=final_state['completion_tokens'],
+        total_tokens=final_state['total_tokens'],
+        session_id=session_id,
     )
+
 
 @app.get("/health")
 def health():

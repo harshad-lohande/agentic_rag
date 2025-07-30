@@ -15,4 +15,9 @@ class Settings(BaseSettings):
     OPENAI_MODEL_NAME: str = "gpt-4.1-nano"
     OPENAI_API_KEY: str
 
+    LANGCHAIN_TRACING_V2: str = "true"
+    LANGCHAIN_API_KEY: str
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGCHAIN_PROJECT: str = "Agentic RAG System"
+
 settings = Settings()

@@ -4,11 +4,15 @@ import requests
 st.set_page_config(page_title="Agentic RAG System", layout="wide")
 st.title("📄 Agentic RAG System")
 
+# Initialize session_id in Streamlit's session state
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+
 # Input box for the user query
 query = st.text_input("Ask a question about your documents:", "")
 
 if query:
-    payload = {"query": query}
+    payload = {"query": query, "session_id": st.session_state.session_id}
     try:
         with st.spinner("Thinking..."):
             # Call the FastAPI backend
@@ -16,6 +20,8 @@ if query:
             response.raise_for_status()  # Raise an exception for bad status codes
 
             result = response.json()
+
+            st.session_state.session_id = result["session_id"]
 
             st.success("Answer:")
             st.write(result["answer"])
