@@ -127,16 +127,22 @@ Refer the .env.example
 1. **Add Your Documents**: Place the .pdf, .docx, or .txt files you want to chat with into the data/ directory.  
 2. **Build and Start the Backend**: This command builds the backend Docker image and starts the FastAPI and Weaviate containers.  
   
-   `docker compose up --build -d`
+   ```
+   docker compose up --build -d
+   ```
    
 
 3. **Ingest Your Data**: Run this script to process your documents and load them into the vector database.  
    
-   `poetry run python app/ingestion.py`
+   ```
+   poetry run python app/ingestion.py
+   ```
 
 4. **Launch the UI**: Start the Streamlit user interface.  
    
-   `poetry run streamlit run ui.py`
+   ```
+   poetry run streamlit run ui.py
+   ```
 
    Navigate to **http://localhost:8501** in your browser to start your conversation.
 
