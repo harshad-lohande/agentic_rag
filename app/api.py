@@ -3,7 +3,13 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
-from app.agentic_workflow import GraphState, retrieve_documents, generate_answer
+from app.agentic_workflow import (
+    GraphState,
+    retrieve_documents,
+    generate_answer,
+    summarize_history,
+    grounding_and_safety_check
+)
 from langgraph.checkpoint.memory import InMemorySaver
 import uuid
 
@@ -13,12 +19,18 @@ async def lifespan(app: FastAPI):
     
     workflow = StateGraph(GraphState)
 
+    # Add the nodes
     workflow.add_node("retrieve", retrieve_documents)
+    workflow.add_node("summarize", summarize_history)
     workflow.add_node("generate", generate_answer)
+    workflow.add_node("safety_check", grounding_and_safety_check) # <-- Add the new node
 
+    # --- Update the graph's edges ---
     workflow.set_entry_point("retrieve")
-    workflow.add_edge("retrieve", "generate")
-    workflow.add_edge("generate", END)
+    workflow.add_edge("retrieve", "summarize")
+    workflow.add_edge("summarize", "generate")
+    workflow.add_edge("generate", "safety_check") # generate -> safety_check
+    workflow.add_edge("safety_check", END)      # safety_check -> END
 
     # --- Add a memory checkpointer ---
     memory = InMemorySaver()
