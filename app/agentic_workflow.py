@@ -1,3 +1,5 @@
+#app/agentic_workflow.py
+
 from typing import List
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
@@ -6,6 +8,7 @@ from langgraph.graph import MessagesState
 
 from app.retriever import create_retriever
 from config import settings
+from app.logging_config import logger
 
 # --- Helper function to format message content ---
 def format_messages_for_llm(messages: list) -> str:
@@ -26,7 +29,7 @@ class GraphState(MessagesState):
     total_tokens: int = 0
 
 def retrieve_documents(state: GraphState) -> dict:
-    print("---NODE: RETRIEVE DOCUMENTS---")
+    logger.info("---NODE: RETRIEVE DOCUMENTS---")
     last_message = state['messages'][-1]
     question = last_message.content
     retriever, client = create_retriever()
@@ -40,7 +43,7 @@ def summarize_history(state: GraphState) -> dict:
     Node to create an append-only summary of the chat history.
     Handles the initial summary differently from subsequent updates.
     """
-    print("---NODE: SUMMARIZE HISTORY---")
+    logger.info("---NODE: SUMMARIZE HISTORY---")
     messages = state["messages"]
     summary = state.get("summary", "")
     turn_count = state.get("turn_count", 0) + 1
@@ -50,12 +53,12 @@ def summarize_history(state: GraphState) -> dict:
     
     # At turn 3, summarize the first two turns (4 messages)
     if turn_count == 3:
-        print("---CREATING INITIAL SUMMARY---")
+        logger.info("---CREATING INITIAL SUMMARY---")
         # All messages except the current user query
         new_messages_to_summarize = messages[:-1]
     # For all subsequent turns, summarize only the last completed turn
     elif turn_count > 3:
-        print("---UPDATING SUMMARY---")
+        logger.info("---UPDATING SUMMARY---")
         new_messages_to_summarize = messages[-3:-1]
 
     if new_messages_to_summarize:
@@ -99,7 +102,7 @@ def generate_answer(state: GraphState) -> dict:
     """
     Node to generate an answer, now with corrected and simplified history.
     """
-    print("---NODE: GENERATE ANSWER---")
+    logger.info("---NODE: GENERATE ANSWER---")
     question = state['messages'][-1].content
     documents = state["documents"]
     summary = state.get("summary", "")
@@ -159,7 +162,7 @@ def grounding_and_safety_check(state: GraphState) -> dict:
     """
     Node to perform a grounding check and add citations.
     """
-    print("---NODE: GROUNDING & SAFETY CHECK---")
+    logger.info("---NODE: GROUNDING & SAFETY CHECK---")
     question = state['messages'][-2].content # The last human message
     answer = state['messages'][-1].content # The last AI message (the answer)
     documents = state["documents"]

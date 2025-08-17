@@ -1,5 +1,6 @@
 import weaviate
 from config import settings
+from app.logging_config import setup_logging, logger
 
 def clear_weaviate_index():
     """
@@ -13,22 +14,23 @@ def clear_weaviate_index():
         )
 
         index_name = settings.INDEX_NAME
-        
+
         # Check if the collection exists before trying to delete
         if client.collections.exists(index_name):
-            print(f"Index '{index_name}' exists. Deleting all objects...")
+            logger.info(f"Index '{index_name}' exists. Deleting all objects...")
             # Delete the entire collection/class
             client.collections.delete(index_name)
-            print(f"Successfully deleted index '{index_name}'.")
+            logger.info(f"Successfully deleted index '{index_name}'.")
         else:
-            print(f"Index '{index_name}' does not exist. Nothing to delete.")
+            logger.warning(f"Index '{index_name}' does not exist. Nothing to delete.")
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}", exc_info=True)
     finally:
         if 'client' in locals() and client.is_connected():
             client.close()
 
 if __name__ == '__main__':
-    # This will clear your Weaviate index before running the main script
+    # Initialize logging when the script is run directly
+    setup_logging()
     clear_weaviate_index()
