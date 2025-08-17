@@ -153,6 +153,35 @@ Refer the .env.example
 
 ---
 
+## **Evaluation**
+
+This project includes a built-in evaluation framework using **RAGAS** (Retrieval-Augmented Generation Assessment) to quantitatively measure the performance of the RAG pipeline. This allows for a data-driven approach to improving the system and comparing the impact of different techniques.
+
+The evaluation measures the following key metrics:
+
+* **Faithfulness**: Measures how factually accurate the generated answer is based on the provided context.
+* **Answer Relevancy**: Assesses how relevant the generated answer is to the user's question.
+* **Context Precision**: Evaluates the signal-to-noise ratio of the retrieved context.
+* **Context Recall**: Measures the ability of the retriever to fetch all the necessary information to answer the question.
+
+### **How to Run the Evaluation**
+
+1.  **Generate the Evaluation Results:**
+    Run the following command from the root of the project. This will run the RAG chain against a ground truth dataset and save the results to a `ragas_evaluation_results.csv` file.
+
+    ```bash
+    poetry run python -m evaluation.evaluate
+    ```
+
+2.  **Visualize the Results:**
+    To view the results in a user-friendly web interface, run the following command:
+    ```bash
+    poetry run streamlit run evaluation/evaluation_ui.py
+    ```
+    This will start a Streamlit application where you can view the evaluation metrics in a clean, interactive table.
+
+---
+
 ## **Future Ideas and Roadmap**
 
 This project has a solid foundation that can be extended with even more powerful agentic capabilities.
