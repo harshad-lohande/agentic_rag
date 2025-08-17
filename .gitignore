@@ -9,3 +9,8 @@ data/
 sample_docs/
 tests/
 weaviate_data/
+
+# specific files
+*.pyc
+*.csv
+*.ipynb
