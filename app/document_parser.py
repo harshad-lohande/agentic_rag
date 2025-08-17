@@ -1,35 +1,42 @@
-import os
+# app/document_parser.py
+
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, Any, Iterator
 import docx
 from pypdf import PdfReader
 
 class DocumentParser:
     """
     A class to parse different document types and extract text and metadata.
+    It now supports streaming for large documents to be more memory-efficient.
     """
-    def parse(self, file_path: str) -> Dict[str, Any]:
+
+    def parse(self, file_path: str) -> Iterator[Dict[str, Any]]:
         """
-        Parses a file and returns its text content and metadata.
+        Parses a file and yields its text content in chunks along with metadata.
 
         Args:
             file_path: The path to the file.
 
-        Returns:
-            A dictionary containing the text content and metadata.
+        Yields:
+            A dictionary containing a chunk of text content and metadata.
         """
         path = Path(file_path)
         if not path.is_file():
             raise FileNotFoundError(f"File not found at: {file_path}")
 
         file_extension = path.suffix.lower()
-        
-        if file_extension == ".pdf":
-            return self._parse_pdf(path)
-        elif file_extension == ".docx":
-            return self._parse_docx(path)
-        elif file_extension == ".txt":
-            return self._parse_txt(path)
+        metadata = self._get_metadata(path)
+
+        parsing_method = {
+            ".pdf": self._stream_pdf,
+            ".docx": self._stream_docx,
+            ".txt": self._stream_txt,
+        }.get(file_extension)
+
+        if parsing_method:
+            for chunk in parsing_method(path):
+                yield {"text": chunk, "metadata": metadata}
         else:
             raise ValueError(f"Unsupported file type: {file_extension}")
 
@@ -43,36 +50,24 @@ class DocumentParser:
             "modification_date": path.stat().st_mtime,
         }
 
-    def _parse_pdf(self, path: Path) -> Dict[str, Any]:
-        """Parses a PDF file."""
-        metadata = self._get_metadata(path)
+    def _stream_pdf(self, path: Path) -> Iterator[str]:
+        """Streams text from a PDF file, page by page."""
         reader = PdfReader(path)
-        text_content = "".join(page.extract_text() for page in reader.pages)
-        
-        # Add PDF-specific metadata
-        doc_info = reader.metadata
-        if doc_info:
-            metadata["author"] = doc_info.author
-            metadata["title"] = doc_info.title
-        
-        return {"text": text_content, "metadata": metadata}
+        for page in reader.pages:
+            yield page.extract_text()
 
-    def _parse_docx(self, path: Path) -> Dict[str, Any]:
-        """Parses a DOCX file."""
-        metadata = self._get_metadata(path)
+    def _stream_docx(self, path: Path) -> Iterator[str]:
+        """Streams text from a DOCX file, paragraph by paragraph."""
         doc = docx.Document(path)
-        text_content = "\n".join(para.text for para in doc.paragraphs)
-        
-        # Add DOCX-specific metadata
-        core_props = doc.core_properties
-        metadata["author"] = core_props.author
-        metadata["title"] = core_props.title
+        for para in doc.paragraphs:
+            if para.text:
+                yield para.text
 
-        return {"text": text_content, "metadata": metadata}
-
-    def _parse_txt(self, path: Path) -> Dict[str, Any]:
-        """Parses a TXT file."""
-        metadata = self._get_metadata(path)
+    def _stream_txt(self, path: Path, chunk_size: int = 4096) -> Iterator[str]:
+        """Streams text from a TXT file in chunks."""
         with open(path, 'r', encoding='utf-8') as f:
-            text_content = f.read()
-        return {"text": text_content, "metadata": metadata}
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
