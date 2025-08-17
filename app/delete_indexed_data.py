@@ -1,3 +1,5 @@
+# app/delete_indexed_data.py
+
 import weaviate
 from config import settings
 from app.logging_config import setup_logging, logger
