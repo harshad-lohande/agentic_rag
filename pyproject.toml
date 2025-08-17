@@ -27,6 +27,7 @@ pydantic = "^2.11.7"
 langgraph = "^0.6.0"
 langsmith = "^0.4.8"
 langmem = "^0.0.29"
+python-json-logger = "^3.3.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
