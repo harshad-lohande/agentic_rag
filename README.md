@@ -16,6 +16,8 @@ This project moves beyond simple RAG chains by implementing a stateful, multi-ag
 * **Dynamic Citations**: The safety agent adds specific, numbered citations to the final answer, referencing the source documents that support its claims, which adds a layer of credibility and verifiability.
 * **Token Usage Tracking**: The system tracks and displays the token consumption (prompt, completion, and total) for every turn of the conversation, providing clear visibility into API costs.
 * **Local-First & Containerized**: The entire application, including the vector database and the backend API, runs locally in a containerized environment using Docker, ensuring consistency and portability.
+* **Structured Logging**: All application events are logged in a structured JSON format, making it easy to monitor, query, and analyze the system's behavior in a production environment.
+* **Memory-Efficient Ingestion**: The system uses a streaming approach to parse and chunk large documents, ensuring that even very large files can be processed without overwhelming the system's memory.
 
 ---
 
@@ -38,11 +40,12 @@ The application is composed of several services that are orchestrated by Docker 
 * **Containerization**: Docker, Docker Compose
 * **Vector Database**: Weaviate
 * **Dependency Management**: Poetry
+* **Logging**: `python-json-logger`
 * **Key Python Libraries**:
-* pydantic-settings: For managing configuration and secrets.
-* sentence-transformers: For creating high-quality text embeddings.
-* langchain-openai: For interacting with OpenAI's language models.
-* pypdf, python-docx: For parsing documents.
+    * `pydantic-settings`: For managing configuration and secrets.
+    * `sentence-transformers`: For creating high-quality text embeddings.
+    * `langchain-openai`: For interacting with OpenAI's language models.
+    * `pypdf`, `python-docx`: For parsing documents.
 
 ---
 
@@ -137,7 +140,7 @@ Refer the .env.example
 3. **Ingest Your Data**: Run this script to process your documents and load them into the vector database.
  
  ```
- poetry run python -m run_ingestion
+ poetry run python run_ingestion.py
  ```
 
 4. **Launch the UI**: Start the Streamlit user interface.
