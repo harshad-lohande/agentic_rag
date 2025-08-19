@@ -3,9 +3,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_openai import ChatOpenAI
-
-from config import settings
+from app.llm_provider import get_llm
 
 def format_docs(docs):
     """Combines the content of multiple documents into a single string."""
@@ -18,11 +16,7 @@ def create_rag_chain(retriever: VectorStoreRetriever, llm=None):
     """
     if llm is None:
         # If no LLM is provided, create the default one
-        llm = ChatOpenAI(
-            model_name=settings.OPENAI_MODEL_NAME,
-            openai_api_key=settings.OPENAI_API_KEY,
-            temperature=0.7
-        )
+        llm = get_llm(fast_model=True)
 
     template = """Answer the question based only on the following context:
     {context}

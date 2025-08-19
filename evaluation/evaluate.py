@@ -1,29 +1,29 @@
-# evaluation/evaluate.py
-
 import pandas as pd
 from datasets import Dataset
 from ragas import evaluate
-from ragas.metrics import (faithfulness,
-    answer_relevancy,
-    context_recall,
-    context_precision,
+# Import the specific metric classes
+from ragas.metrics import (
+    Faithfulness,
+    AnswerRelevancy,
+    ContextRecall,
+    ContextPrecision,
 )
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
+import warnings
 
 from app.retriever import create_retriever
 from app.rag_chain import create_rag_chain
 from app.logging_config import setup_logging, logger
 from evaluation.ground_truth import get_ground_truth_data
 from config import settings
-import warnings
+from app.llm_provider import get_llm
 
-# Suppress the specific DeprecationWarning from ragas
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas.metrics.base")
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas.metrics._context_recall")
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas.metrics._context_precision")
+# Suppress the internal RAGAS deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 
 # Initialize logging
 setup_logging()
@@ -71,24 +71,27 @@ def run_evaluation():
     }
     dataset = Dataset.from_dict(data)
 
-    # 4. Wrap the LangChain models for RAGAS
-    evaluation_llm = LangchainLLMWrapper(ChatOpenAI(model_name=settings.OPENAI_MODEL_NAME, openai_api_key=settings.OPENAI_API_KEY))
-    # evaluation_embeddings = LangchainEmbeddingsWrapper(OpenAIEmbeddings(openai_api_key=settings.OPENAI_API_KEY))
-    # Use the same embedding model as the one used in retriever for more consistent evaluation
+    # 4. Initialize metrics with the required models
+    evaluation_llm = LangchainLLMWrapper(get_llm(fast_model=True))
     evaluation_embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL))
+    
+    # Explicitly create and configure each metric
+    faithfulness_metric = Faithfulness(llm=evaluation_llm)
+    answer_relevancy_metric = AnswerRelevancy(llm=evaluation_llm, embeddings=evaluation_embeddings)
+    context_recall_metric = ContextRecall(llm=evaluation_llm)
+    context_precision_metric = ContextPrecision(llm=evaluation_llm)
+
 
     # 5. Run the Evaluation
     logger.info("--- Running RAGAS Evaluation ---")
     result = evaluate(
         dataset=dataset,
         metrics=[
-            faithfulness,
-            answer_relevancy,
-            context_recall,
-            context_precision,
+            faithfulness_metric,
+            answer_relevancy_metric,
+            context_recall_metric,
+            context_precision_metric,
         ],
-        llm=evaluation_llm,
-        embeddings=evaluation_embeddings
     )
 
     # 6. Display the Results
