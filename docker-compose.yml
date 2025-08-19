@@ -15,6 +15,7 @@ services:
       ENABLE_MODULES: 'text2vec-openai,text2vec-cohere,text2vec-huggingface,ref2vec-centroid,generative-openai,qna-openai'
       # This variable is correct for this version, we will keep it
       PERSISTENCE_LSM_ACCESS_STRATEGY_DISK_USE_READONLY_PERCENTAGE: 90
+      TZ: Asia/Kolkata
     healthcheck:
       # Use a slightly more robust wget command for the healthcheck
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1"]
@@ -30,6 +31,7 @@ services:
       - .env
     environment:
       - WEAVIATE_HOST=weaviate
+      - TZ=Asia/Kolkata
     volumes:
       - ./data:/app/data
       - ./app:/app/app
