@@ -1,6 +1,7 @@
 # Stage 1: Use Poetry to generate a requirements.txt file for production
 FROM python:3.12-slim AS builder
 WORKDIR /app
+
 # Use a specific, known-good version of Poetry
 RUN pip install "poetry==2.1.4"
 COPY pyproject.toml poetry.lock* ./
