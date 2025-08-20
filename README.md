@@ -1,34 +1,39 @@
-# **Agentic RAG System: A Production-Grade Conversational AI**
+# **Autonomous Agentic RAG System: A Production-Grade Conversational AI**
 
-This repository contains the source code for a sophisticated, local-first Agentic Retrieval-Augmented Generation (RAG) system. Which means the entire data processing and storage pipeline is designed to run locally, without sending your private documents to a third-party service for indexing or storage.
+This repository contains the source code for a sophisticated, local-first, and autonomous Retrieval-Augmented Generation (RAG) system. The application is designed from the ground up to be a production-ready, containerized solution that can ingest custom documents, maintain multi-turn conversations, and provide factually-grounded, cited answers.
 
-The application is designed from the ground up to be a production-ready, containerized solution that can ingest custom documents, maintain multi-turn conversations, and provide factually-grounded, cited answers.
-
-This project moves beyond simple RAG chains by implementing a stateful, multi-agent architecture using LangGraph. It includes advanced features like conversational memory, automatic history summarization for token efficiency, and a final grounding-and-safety check to prevent hallucinations and ensure trustworthiness.
+This project moves beyond simple RAG chains by implementing a stateful, decision-driven, and self-correcting agentic architecture using LangGraph. The agent can dynamically alter its execution path based on the quality of its internal results, employing a series of advanced RAG techniques to recover from failures and improve the accuracy of its responses.
 
 ---
 
 ## **Core Features**
 
+* **Autonomous & Self-Correcting**: The agent can detect when its document retrieval has failed or is irrelevant and automatically triggers a multi-step self-correction loop to find a better answer.
+* **Adaptive RAG Strategies**: The agent has a toolkit of advanced RAG techniques it can deploy, including:
+    * **Conversational Query Rewriting**: Automatically transforms conversational follow-up questions into precise, standalone queries.
+    * **Relevance Re-ranking**: Uses a powerful Cross-Encoder model to sift through initial search results and select only the most relevant documents to use as context.
+    * **Hypothetical Document Embeddings (HyDE)**: Generates a hypothetical "perfect" answer to improve the relevance of the document search.
+    * **Tool Use (Web Search)**: As a final fallback, the agent can use the Tavily Search API to find answers from the internet if the information is not present in the local documents.
+* **Structured Output & Grounding**: The agent uses LLMs with structured output (Pydantic) to ensure reliable decision-making and to perform a final grounding check, programmatically adding citations and verifying the factual accuracy of every claim.
+* **Local-First & Containerized**: The entire application, including the Weaviate vector database, runs locally in a containerized environment using Docker, ensuring data privacy, consistency, and portability.
+* **Memory-Efficient Ingestion**: A streaming approach is used to parse and chunk large documents, allowing for the ingestion of very large files without overwhelming the system's memory.
+* **Structured Logging**: All application events are logged in a structured JSON format for easy monitoring and analysis.
+* **Built-in Evaluation Framework**: The project includes an evaluation suite using the RAGAS framework to quantitatively measure the performance of the RAG pipeline.
 * **Conversational Memory**: The agent remembers the context of previous interactions in a session, allowing for natural, multi-turn follow-up questions.
-* **Efficient History Summarization**: To handle long conversations without exceeding token limits, the agent automatically creates rolling summaries of the chat history, ensuring both context retention and cost efficiency.
-* **Grounding & Safety Agent**: Every answer is passed through a final validation node that fact-checks the generated response against the source documents to prevent hallucinations.
-* **Dynamic Citations**: The safety agent adds specific, numbered citations to the final answer, referencing the source documents that support its claims, which adds a layer of credibility and verifiability.
-* **Token Usage Tracking**: The system tracks and displays the token consumption (prompt, completion, and total) for every turn of the conversation, providing clear visibility into API costs.
-* **Local-First & Containerized**: The entire application, including the vector database and the backend API, runs locally in a containerized environment using Docker, ensuring consistency and portability.
 * **Structured Logging**: All application events are logged in a structured JSON format, making it easy to monitor, query, and analyze the system's behavior in a production environment.
-* **Memory-Efficient Ingestion**: The system uses a streaming approach to parse and chunk large documents, ensuring that even very large files can be processed without overwhelming the system's memory.
 
 ---
 
 ## **System Architecture**
 
-The application is composed of several services that are orchestrated by Docker Compose:
+The application is built around a decision-driven agent orchestrated by LangGraph. Unlike a simple, linear workflow, this agent can dynamically route its execution based on the state of the conversation and the quality of its retrieved information.
 
-1. **Weaviate Vector Store**: A containerized vector database that stores the embedded document chunks for fast retrieval.
-2. **FastAPI Backend**: A containerized backend service that hosts the agentic workflow. It exposes a simple API for the user interface to interact with.
-3. **LangGraph Agent**: The core logic of the application, defined as a stateful graph. The graph orchestrates the flow of a query through several nodes: document retrieval, history summarization, answer generation, and a final safety check.
-4. **Streamlit UI**: A simple, local web interface that allows users to interact with the backend API in a conversational manner.
+
+The architecture includes:
+1.  **Weaviate Vector Store**: A containerized vector database that stores the embedded document chunks for fast retrieval.
+2.  **FastAPI Backend**: A containerized backend service that hosts the agentic workflow. It exposes a API for the user interface to interact with.
+3.  **Autonomous LangGraph Agent**: The core of the application, defined as a stateful graph with conditional routing. The agent can classify queries, transform them, retrieve and re-rank documents, and enter a self-correction loop if necessary.
+4.  **Streamlit UI**: A simple, web interface that allows users to interact with the backend API in a conversational manner.
 
 ---
 
@@ -41,11 +46,12 @@ The application is composed of several services that are orchestrated by Docker 
 * **Vector Database**: Weaviate
 * **Dependency Management**: Poetry
 * **Logging**: `python-json-logger`
+* **Evaluation**: RAGAS
 * **Key Python Libraries**:
-    * `pydantic-settings`: For managing configuration and secrets.
-    * `sentence-transformers`: For creating high-quality text embeddings.
-    * `langchain-openai`: For interacting with OpenAI's language models.
-    * `pypdf`, `python-docx`: For parsing documents.
+    * `pydantic-settings`: For managing configuration.
+    * `sentence-transformers`: For text embeddings and re-ranking.
+    * `langchain-openai`, `langchain-google-genai`: For interacting with LLMs.
+    * `tavily-python`: For the web search tool.
 
 ---
 
@@ -129,27 +135,23 @@ Refer the .env.example
 
 ## **How to Run the Application 🚀**
 
-1. **Add Your Documents**: Place the .pdf, .docx, or .txt files you want to chat with into the data/ directory.
-2. **Build and Start the Backend**: This command builds the backend Docker image and starts the FastAPI and Weaviate containers.
+1.  **Add Your Documents**: Place your `.pdf`, `.docx`, or `.txt` files into the `data/` directory.
 
- ```
- docker compose up --build -d
- ```
- 
+2.  **Build and Start the Backend**: This command builds the backend Docker image and starts the FastAPI and Weaviate containers.
+    ```bash
+    docker compose up --build -d
+    ```
 
-3. **Ingest Your Data**: Run this script to process your documents and load them into the vector database.
- 
- ```
- poetry run python run_ingestion.py
- ```
+3.  **Ingest Your Data**: Run this script to process your documents and load them into the vector database.
+    ```bash
+    poetry run python run_ingestion.py
+    ```
 
-4. **Launch the UI**: Start the Streamlit user interface.
- 
- ```
- poetry run streamlit run ui.py
- ```
-
- Navigate to **http://localhost:8501** in your browser to start your conversation.
+4.  **Launch the UI**: Start the Streamlit user interface.
+    ```bash
+    poetry run streamlit run ui.py
+    ```
+    Navigate to **http://localhost:8501** in your browser to start your conversation.
 
 ---
 
@@ -184,10 +186,6 @@ The evaluation measures the following key metrics:
 
 ## **Future Ideas and Roadmap**
 
-This project has a solid foundation that can be extended with even more powerful agentic capabilities.
-
-* **Implement Query Rewriting**: Add a node to the graph that analyzes the user's query in the context of the conversation and rewrites it to be more optimal for retrieval.
-* **Add a Re-ranking Agent**: Implement a node that takes the initially retrieved documents and uses a more powerful Cross-Encoder model to re-rank them for relevance before passing them to the generator.
-* **Tool Use**: Extend the agent with the ability to use tools, such as performing a web search if the answer cannot be found in the provided documents.
-* **Persistent Memory**: Replace the current InMemorySaver with a persistent checkpointer (like PostgresSaver or RedisSaver) so that conversations can be continued across application restarts.
+* **Persistent Memory**: Replace the current `InMemorySaver` with a persistent checkpointer (like `PostgresSaver` or `RedisSaver`) so that conversations can be continued across application restarts.
+* **Semantic Chunking**: Implement a more advanced chunking strategy based on semantic meaning rather than fixed sizes.
 * **Deployment**: Package and deploy the application to a scalable, production-ready environment like Google Cloud Run or AWS App Runner.
