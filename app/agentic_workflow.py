@@ -5,10 +5,13 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import MessagesState, END
 from pydantic import BaseModel, Field
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_community.tools.tavily_search import TavilySearchResults
 
 from app.retriever import create_retriever
 from app.llm_provider import get_llm
 from app.logging_config import logger
+from config import settings
 
 # --- Pydantic Models for Structured Output ---
 
@@ -18,15 +21,10 @@ class QueryClassification(BaseModel):
         ..., description="The classification of the user's query, either 'simple' or 'complex'."
     )
 
-class VerifiedClaim(BaseModel):
-    """A single claim or statement made in the generated answer, with verification."""
-    statement: str = Field(..., description="A single claim or statement made in the generated answer.")
-    is_supported: bool = Field(..., description="Whether the statement is directly supported by the provided source documents.")
-    supporting_sources: List[int] = Field(..., description="A list of source numbers (e.g., [1], [2]) that support the claim.")
-
-class GroundedAnswer(BaseModel):
-    """The final, grounded answer composed of a list of verified claims."""
-    verified_claims: List[VerifiedClaim]
+class GroundingCheck(BaseModel):
+    """The result of a grounding and safety check."""
+    is_grounded: bool = Field(..., description="Whether the answer is fully supported by the provided source documents.")
+    revised_answer: str = Field(..., description="The revised, fact-checked, and cited answer. If not grounded, this should be a message indicating failure.")
 
 # --- Helper function to format message content ---
 def format_messages_for_llm(messages: list) -> str:
@@ -37,27 +35,29 @@ def format_messages_for_llm(messages: list) -> str:
         formatted.append(f"{role}: {msg.content}")
     return "\n".join(formatted)
 
-# --- GraphState with decision-making flags ---
+# --- Updated GraphState with self-correction fields ---
 class GraphState(MessagesState):
     documents: List[Document]
     summary: str = ""
     turn_count: int = 0
-    # The transformed query for retrieval
     transformed_query: str | None = None
-    # Flag to indicate if the query is complex
+    hyde_document: str | None = None
     is_complex_query: bool = False
-    # Flag to indicate if retrieval was successful
     retrieval_success: bool = False
+    needs_reranking: bool = False
+    grounding_success: bool = True
+    is_web_search: bool = False
+    retries: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
 
+# --- Agentic Nodes ---
 
-# --- Node: Classify Query with Structured Output ---
 def classify_query(state: GraphState) -> dict:
     """
-    Classifies the user's query to determine if it's a simple standalone question
-    or a complex one that requires conversation history.
+    Classifies the user's query using structured output to determine if it is
+    a simple standalone question or a complex one that requires conversation history.
     """
     logger.info("---NODE: CLASSIFY QUERY---")
     last_message = state['messages'][-1].content
@@ -76,6 +76,7 @@ def classify_query(state: GraphState) -> dict:
         User Query: {query}
         """
     )
+    # Use structured output
     llm = get_llm(fast_model=True).with_structured_output(QueryClassification)
     chain = prompt | llm
 
@@ -87,7 +88,6 @@ def classify_query(state: GraphState) -> dict:
     return {"is_complex_query": is_complex}
 
 
-# --- Node: Transform Query ---
 def transform_query(state: GraphState) -> dict:
     """
     Rewrites the user's query into a more precise, standalone question
@@ -119,69 +119,62 @@ def transform_query(state: GraphState) -> dict:
     return {"transformed_query": result.content}
 
 
-# --- Node: Retrieve Documents ---
+def generate_hyde_document(state: GraphState) -> dict:
+    """Generates a hypothetical answer to be used for retrieval."""
+    logger.info("---NODE: GENERATE HYDE DOCUMENT---")
+    query = state.get("transformed_query") or state['messages'][-1].content
+    prompt = ChatPromptTemplate.from_template(
+        "Generate a concise, hypothetical answer to the following question: {question}"
+    )
+    llm = get_llm(fast_model=True)
+    chain = prompt | llm
+    result = chain.invoke({"question": query})
+    return {"hyde_document": result.content}
+
+def web_search(state: GraphState) -> dict:
+    """Performs a web search using the Tavily API."""
+    logger.info("---NODE: WEB SEARCH---")
+    query = state.get("transformed_query") or state['messages'][-1].content
+    tool = TavilySearchResults(max_results=3)
+    documents = tool.invoke(query)
+    # The tool returns a list of dicts, we need to convert them to Document objects
+    doc_objects = [Document(page_content=doc["content"], metadata={"source": doc["url"]}) for doc in documents]
+    return {"documents": doc_objects, "retrieval_success": bool(doc_objects), "is_web_search": True}
+
 def retrieve_documents(state: GraphState) -> dict:
     """
-    Retrieves documents based on the transformed query, or the original query
-    if no transformation was needed.
+    Retrieves documents using either the query or a HyDE document for embedding.
     """
     logger.info("---NODE: RETRIEVE DOCUMENTS---")
-    # Use the transformed query if it exists, otherwise use the original
-    query = state.get("transformed_query") or state['messages'][-1].content
+    query = state.get("hyde_document") or state.get("transformed_query") or state['messages'][-1].content
     
     retriever, client = create_retriever()
     documents = retriever.invoke(query)
     client.close()
     
-    # Set the retrieval_success flag
-    retrieval_success = bool(documents)
-    logger.info(f"Retrieval success: {retrieval_success}")
+    needs_reranking = bool(documents)
+    return {"documents": documents, "needs_reranking": needs_reranking, "is_web_search": False, "hyde_document": None}
 
-    return {"documents": documents, "retrieval_success": retrieval_success}
+def grade_and_rerank_documents(state: GraphState) -> dict:
+    """
+    Re-ranks retrieved documents based on their relevance to the query using a Cross-Encoder.
+    """
+    logger.info("---NODE: RE-RANK DOCUMENTS---")
+    query = state.get("transformed_query") or state['messages'][-1].content
+    documents = state["documents"]
 
+    cross_encoder = HuggingFaceCrossEncoder(model_name=settings.CROSS_ENCODER_MODEL_SMALL)
+    pairs = [[query, doc.page_content] for doc in documents]
+    scores = cross_encoder.score(pairs)
+    scored_docs = list(zip(documents, scores))
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+    reranked_docs = [doc for doc, score in scored_docs[:3]]
+    
+    retrieval_success = bool(reranked_docs)
+    logger.info(f"Re-ranking complete. Selected top {len(reranked_docs)} relevant documents.")
 
-# --- Node: Route for Retrieval (Router) ---
-def route_for_retrieval(state: GraphState) -> str:
-    """
-    The first router in our graph. Decides whether to transform the query
-    or retrieve documents directly.
-    """
-    logger.info("---ROUTER: ROUTE FOR RETRIEVAL---")
-    if state.get("is_complex_query"):
-        logger.info("Routing to: transform_query")
-        return "transform_query"
-    else:
-        logger.info("Routing to: retrieve")
-        return "retrieve"
+    return {"documents": reranked_docs, "retrieval_success": retrieval_success}
 
-# --- Node: Route for Generation (Router) ---
-def route_for_generation(state: GraphState) -> str:
-    """
-    The second router in our graph. Decides whether to generate an answer
-    or handle a retrieval failure.
-    """
-    logger.info("---ROUTER: ROUTE FOR GENERATION---")
-    if state.get("retrieval_success"):
-        logger.info("Routing to: summarize")
-        return "summarize"
-    else:
-        logger.info("Routing to: retrieval_failure")
-        # In a more advanced setup, this could route to a web search tool
-        return "retrieval_failure"
-
-# --- Node: Handle Retrieval Failure ---
-def handle_retrieval_failure(state: GraphState) -> dict:
-    """
-    A simple node to handle cases where no documents were retrieved.
-    """
-    logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
-    return {
-        "messages": [
-            "I'm sorry, but I couldn't find any information in the provided documents to answer your question."
-        ]
-    }
-
-# --- Node: Summarize conversation history ---
 def summarize_history(state: GraphState) -> dict:
     """
     Node to create an append-only summary of the chat history.
@@ -236,8 +229,6 @@ def summarize_history(state: GraphState) -> dict:
 
     return {"turn_count": turn_count}
 
-
-# --- Node: Generate answer based on summary, context, and chat history ---
 def generate_answer(state: GraphState) -> dict:
     """
     Node to generate an answer, now with corrected and simplified history.
@@ -295,20 +286,15 @@ def generate_answer(state: GraphState) -> dict:
         "total_tokens": total_tokens,
     }
 
-# --- Node: Grounding and Safety Node with Structured Output ---
 def grounding_and_safety_check(state: GraphState) -> dict:
     """
-    Performs a grounding check using structured output and reconstructs the
-    final answer with reliable citations.
+    Performs a grounding check using structured output and revises the answer.
+    Sets a flag based on whether the answer is grounded in the context.
     """
     logger.info("---NODE: GROUNDING & SAFETY CHECK---")
     question = state['messages'][-2].content
     answer = state['messages'][-1].content
     documents = state["documents"]
-    
-    prompt_tokens = state.get("prompt_tokens", 0)
-    completion_tokens = state.get("completion_tokens", 0)
-    total_tokens = state.get("total_tokens", 0)
 
     grounding_prompt = ChatPromptTemplate.from_template(
         """You are a helpful assistant that acts as a final quality check.
@@ -324,16 +310,15 @@ def grounding_and_safety_check(state: GraphState) -> dict:
         {answer}
 
         Please perform the following tasks:
-        1. Break down the generated answer into individual claims/statements.
-        2. For each statement, verify if it is supported by the provided source documents.
-        3. For each supported statement, identify the source numbers of the documents that support it.
-        4. If the answer is completely unsupported, respond with a single claim stating that you cannot answer the question.
-        
-        Return a list of verified claims in the requested structured format.
+        1. Verify that every claim in the generated answer is supported by the information in the source documents.
+        2. If the answer is fully supported, revise it to include citations in IEEE format (e.g., [1], [2]). List the sources in a 'References' section at the end.
+        3. If the answer is not supported or contains hallucinations, set 'is_grounded' to false and provide a revised answer stating that you cannot answer based on the documents.
+
+        Return the result in the requested structured format.
         """
     )
 
-    llm = get_llm(fast_model=False).with_structured_output(GroundedAnswer)
+    llm = get_llm(fast_model=False).with_structured_output(GroundingCheck)
 
     def format_docs_for_citation(docs: List[Document]) -> str:
         """Formats docs with numbered sources for citation."""
@@ -351,33 +336,97 @@ def grounding_and_safety_check(state: GraphState) -> dict:
         "answer": answer
     })
     
-    # --- Programmatically reconstruct the final answer ---
-    final_answer_parts = []
-    cited_sources = set()
-    for claim in response.verified_claims:
-        if claim.is_supported and claim.supporting_sources:
-            citations = [f"[{source_num}]" for source_num in claim.supporting_sources]
-            cited_sources.update(claim.supporting_sources)
-            final_answer_parts.append(f"{claim.statement} {''.join(citations)}")
-        else:
-            final_answer_parts.append(claim.statement)
-    
-    final_answer = " ".join(final_answer_parts)
-    
-    # Add the references section
-    if cited_sources:
-        final_answer += "\n\n**References:**\n"
-        for source_num in sorted(list(cited_sources)):
-            file_name = documents[source_num - 1].metadata.get('file_name', 'N/A')
-            final_answer += f"[{source_num}] {file_name}\n"
+    logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
-    state['messages'][-1].content = final_answer
-
-    # Token usage is not available in the structured output response, so we'll skip updating it for this node.
-    
     return {
-        "messages": state['messages'],
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
+        "messages": [response.revised_answer],
+        "grounding_success": response.is_grounded,
     }
+
+def web_search_safety_check(state: GraphState) -> dict:
+    """A simplified safety check for web search results that adds citations."""
+    logger.info("---NODE: WEB SEARCH SAFETY CHECK---")
+    answer = state['messages'][-1].content
+    documents = state["documents"]
+    
+    cited_answer = f"{answer}\n\n**Sources:**\n"
+    for i, doc in enumerate(documents):
+        source_url = doc.metadata.get('source', 'N/A')
+        cited_answer += f"[{i+1}] {source_url}\n"
+        
+    return {"messages": [cited_answer]}
+
+def handle_retrieval_failure(state: GraphState) -> dict:
+    logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
+    return {
+        "messages": [
+            "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
+        ]
+    }
+
+def increment_retry_counter(state: GraphState) -> dict:
+    logger.info("---NODE: INCREMENT RETRY COUNTER---")
+    retries = state.get("retries", 0) + 1
+    return {"retries": retries}
+
+# --- Routers ---
+
+def route_for_retrieval(state: GraphState) -> str:
+    logger.info("---ROUTER: ROUTE FOR RETRIEVAL---")
+    if state.get("is_complex_query"):
+        return "transform_query"
+    else:
+        return "retrieve"
+
+def route_after_retrieval(state: GraphState) -> str:
+    logger.info("---ROUTER: ROUTE AFTER RETRIEVAL---")
+    if state.get("needs_reranking"):
+        return "rerank_documents"
+    else:
+        return "self_correction_loop"
+
+def route_after_reranking(state: GraphState) -> str:
+    logger.info("---ROUTER: ROUTE AFTER RE-RANKING---")
+    if state.get("retrieval_success"):
+        return "summarize"
+    else:
+        return "self_correction_loop"
+    
+def route_after_generation(state: GraphState) -> str:
+    """
+    Router that decides which safety check to use based on the source of the documents.
+    """
+    logger.info("---ROUTER: ROUTE AFTER GENERATION---")
+    if state.get("is_web_search"):
+        logger.info("Routing to: web_search_safety_check")
+        return "web_search_safety_check"
+    else:
+        logger.info("Routing to: safety_check")
+        return "safety_check"
+
+def route_after_safety_check(state: GraphState) -> str:
+    logger.info("---ROUTER: ROUTE AFTER SAFETY CHECK---")
+    if state.get("grounding_success"):
+        return "END"
+    else:
+        return "self_correction_loop"
+
+def route_correction_strategy(state: GraphState) -> str:
+    """
+    Routes to the next correction strategy based on the retry count.
+    """
+    logger.info("---ROUTER: ROUTE CORRECTION STRATEGY---")
+    retries = state.get("retries", 0)
+    
+    if retries == 0:
+        logger.info("Correction Strategy 1: Query Transformation")
+        return "transform_query"
+    elif retries == 1:
+        logger.info("Correction Strategy 2: HyDE")
+        return "generate_hyde_document"
+    elif retries == 2:
+        logger.info("Correction Strategy 3: Web Search")
+        return "web_search"
+    else:
+        logger.warning("Max retries exceeded. Routing to failure handler.")
+        return "handle_retrieval_failure"

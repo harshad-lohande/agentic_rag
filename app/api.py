@@ -7,13 +7,22 @@ from app.agentic_workflow import (
     GraphState,
     classify_query,
     transform_query,
+    generate_hyde_document,
+    web_search,
     retrieve_documents,
+    grade_and_rerank_documents,
+    web_search_safety_check,
     route_for_retrieval,
-    route_for_generation,
+    route_after_retrieval,
+    route_after_reranking,
+    increment_retry_counter,
+    route_correction_strategy,
     handle_retrieval_failure,
     generate_answer,
     summarize_history,
-    grounding_and_safety_check
+    grounding_and_safety_check,
+    route_after_generation,
+    route_after_safety_check,
 )
 from langgraph.checkpoint.memory import InMemorySaver
 import uuid
@@ -28,19 +37,24 @@ async def lifespan(app: FastAPI):
     
     workflow = StateGraph(GraphState)
 
-    # --- Add the new nodes to the graph ---
+    # --- Add all nodes to the graph ---
     workflow.add_node("classify_query", classify_query)
     workflow.add_node("transform_query", transform_query)
+    workflow.add_node("generate_hyde_document", generate_hyde_document)
+    workflow.add_node("web_search", web_search)
     workflow.add_node("retrieve_docs", retrieve_documents)
+    workflow.add_node("rerank_documents", grade_and_rerank_documents)
+    workflow.add_node("self_correction_loop", increment_retry_counter)
     workflow.add_node("handle_retrieval_failure", handle_retrieval_failure)
     workflow.add_node("summarize_history", summarize_history)
     workflow.add_node("generate_answer", generate_answer)
     workflow.add_node("safety_check", grounding_and_safety_check)
+    workflow.add_node("web_search_safety_check", web_search_safety_check)
+    workflow.add_node("route_correction_strategy", route_correction_strategy)
 
     # --- Set up the graph's edges and conditional routing ---
     workflow.set_entry_point("classify_query")
     
-    # Conditional routing after classification
     workflow.add_conditional_edges(
         "classify_query",
         route_for_retrieval,
@@ -52,20 +66,68 @@ async def lifespan(app: FastAPI):
     
     workflow.add_edge("transform_query", "retrieve_docs")
     
-    # Conditional routing after retrieval
     workflow.add_conditional_edges(
-        "retrieve_docs",
-        route_for_generation,
+        "retrieve_docs", 
+        route_after_retrieval, 
         {
-            "summarize": "summarize_history",
-            "retrieval_failure": "handle_retrieval_failure",
+            "rerank_documents": "rerank_documents",
+            "self_correction_loop": "self_correction_loop",
         }
     )
 
+    workflow.add_conditional_edges(
+        "rerank_documents", 
+        route_after_reranking, 
+        {
+            "summarize": "summarize_history",
+            "self_correction_loop": "self_correction_loop",
+        }
+    )
+
+    # The Self-Correction Loop
+    workflow.add_edge("self_correction_loop", "route_correction_strategy")
+
+    workflow.add_conditional_edges(
+        "route_correction_strategy",
+        route_correction_strategy,
+        {
+            "transform_query": "transform_query",
+            "generate_hyde_document": "generate_hyde_document",
+            "web_search": "web_search",
+            "handle_retrieval_failure": "handle_retrieval_failure"
+        }
+    )
+    workflow.add_edge("generate_hyde_document", "retrieve_docs")
+    
+    # The Generation Path
     workflow.add_edge("summarize_history", "generate_answer")
-    workflow.add_edge("generate_answer", "safety_check")
-    workflow.add_edge("safety_check", END)
+    
+    # After generation, route to the correct safety check
+    workflow.add_conditional_edges(
+        "generate_answer",
+        route_after_generation,
+        {
+            "safety_check": "safety_check",
+            "web_search_safety_check": "web_search_safety_check"
+        }
+    )
+    
+    # After the standard safety check, either end or loop
+    workflow.add_conditional_edges(
+        "safety_check", 
+        route_after_safety_check, 
+        {
+            "END": END,
+            "self_correction_loop": "self_correction_loop"
+        }
+    )
+    
+    # The Web Search Path also goes to summarization
+    workflow.add_edge("web_search", "summarize_history")
+    
+    # Endpoints
     workflow.add_edge("handle_retrieval_failure", END)
+    workflow.add_edge("web_search_safety_check", END)
 
 
     # --- Add a memory checkpointer ---
@@ -123,7 +185,6 @@ async def query_endpoint(request: QueryRequest):
         total_tokens=final_state['total_tokens'],
         session_id=session_id,
     )
-
 
 @app.get("/health")
 def health():
