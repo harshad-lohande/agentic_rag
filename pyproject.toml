@@ -33,6 +33,7 @@ ragas = "^0.3.1"
 pandas = "^2.2.1"
 pyarrow = "^21.0.0"
 datasets = "^2.20.0"
+tavily-python = "^0.7.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
