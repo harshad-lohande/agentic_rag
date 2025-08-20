@@ -32,4 +32,9 @@ class Settings(BaseSettings):
     LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
     LANGCHAIN_PROJECT: str = "Agentic RAG System"
 
+    # --- HuggingFace Cross-Encoder Settings ---
+    CROSS_ENCODER_MODEL_SMALL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    CROSS_ENCODER_MODEL_LARGE: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    CROSS_ENCODER_MODEL_ROBERTA: str = "cross-encoder/stsb-roberta-large"
+
 settings = Settings()
