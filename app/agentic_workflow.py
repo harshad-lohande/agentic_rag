@@ -38,6 +38,7 @@ def format_messages_for_llm(messages: list) -> str:
 # --- Updated GraphState with self-correction fields ---
 class GraphState(MessagesState):
     documents: List[Document]
+    initial_documents: List[Document] # To store the initially retrieved docs
     summary: str = ""
     turn_count: int = 0
     transformed_query: str | None = None
@@ -47,7 +48,8 @@ class GraphState(MessagesState):
     needs_reranking: bool = False
     grounding_success: bool = True
     is_web_search: bool = False
-    retries: int = 0
+    retrieval_retries: int = 0
+    grounding_retries: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -153,7 +155,7 @@ def retrieve_documents(state: GraphState) -> dict:
     client.close()
     
     needs_reranking = bool(documents)
-    return {"documents": documents, "needs_reranking": needs_reranking, "is_web_search": False, "hyde_document": None}
+    return {"documents": documents, "initial_documents": documents, "needs_reranking": needs_reranking, "is_web_search": False, "hyde_document": None}
 
 def grade_and_rerank_documents(state: GraphState) -> dict:
     """
@@ -241,8 +243,7 @@ def generate_answer(state: GraphState) -> dict:
     completion_tokens = state.get("completion_tokens", 0)
     total_tokens = state.get("total_tokens", 0)
     
-    prompt = ChatPromptTemplate.from_template(
-        """Answer the question based only on the following summary, context, and chat history. Don't make up information.
+    prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information.
         
         Conversation Summary:
         {summary}
@@ -254,12 +255,21 @@ def generate_answer(state: GraphState) -> dict:
         {chat_history}
 
         Question: {question}"""
-    )
+
+    # Add a stricter instruction for grounding retries
+    if state.get("grounding_retries", 0) > 0:
+        logger.info("Applying stricter prompt for re-generation.")
+        prompt_template += "\n\nCRITICAL: Ensure every single claim in your answer is directly supported by the provided context. Do not infer or add outside information."
+
+
+    prompt = ChatPromptTemplate.from_template(prompt_template)
 
     llm = get_llm(fast_model=True)
+    llm.temperature = 0.1
     
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
+    
     rag_chain = prompt | llm
     
     # Get the last COMPLETED turn (human/ai pair) for recent history
@@ -269,7 +279,7 @@ def generate_answer(state: GraphState) -> dict:
     
     generation = rag_chain.invoke({
         "question": question, 
-        "context": documents,
+        "context": format_docs(documents),
         "summary": summary,
         "chat_history": formatted_recent_history 
     })
@@ -364,10 +374,66 @@ def handle_retrieval_failure(state: GraphState) -> dict:
         ]
     }
 
-def increment_retry_counter(state: GraphState) -> dict:
-    logger.info("---NODE: INCREMENT RETRY COUNTER---")
-    retries = state.get("retries", 0) + 1
-    return {"retries": retries}
+def handle_grounding_failure(state: GraphState) -> dict:
+    logger.info("---NODE: HANDLE GROUNDING FAILURE---")
+    return {
+        "messages": [
+            "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
+        ]
+    }
+
+def increment_retrieval_retry_counter(state: GraphState) -> dict:
+    logger.info("---NODE: INCREMENT RETRIEVAL RETRY COUNTER---")
+    retries = state.get("retrieval_retries", 0) + 1
+    return {"retrieval_retries": retries}
+
+def increment_grounding_retry_counter(state: GraphState) -> dict:
+    logger.info("---NODE: INCREMENT GROUNDING RETRY COUNTER---")
+    retries = state.get("grounding_retries", 0) + 1
+    return {"grounding_retries": retries}
+
+def smart_retrieval_and_rerank(state: GraphState) -> dict:
+    """
+    A more powerful retrieval and re-ranking step for grounding correction.
+    Uses the larger cross-encoder model.
+    """
+    logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
+    query = state.get("transformed_query") or state['messages'][-1].content
+    # Use the initial, unfiltered documents for re-ranking
+    documents = state["initial_documents"]
+
+    cross_encoder = HuggingFaceCrossEncoder(model_name=settings.CROSS_ENCODER_MODEL_LARGE)
+    pairs = [[query, doc.page_content] for doc in documents]
+    scores = cross_encoder.score(pairs)
+    scored_docs = list(zip(documents, scores))
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+    # Keep a slightly larger set of top documents for better context
+    reranked_docs = [doc for doc, score in scored_docs[:4]] 
+    
+    logger.info(f"Smart re-ranking complete. Selected top {len(reranked_docs)} documents.")
+
+    return {"documents": reranked_docs}
+
+def hybrid_context_retrieval(state: GraphState) -> dict:
+    """
+    Combines the best internal documents with fresh web search results.
+    """
+    logger.info("---NODE: HYBRID CONTEXT RETRIEVAL (GROUNDING CORRECTION)---")
+    internal_documents = state["documents"]
+    
+    # Perform a web search
+    web_search_state = web_search(state)
+    web_documents = web_search_state.get("documents", [])
+    
+    # Combine and de-duplicate
+    combined_docs = internal_documents + web_documents
+    
+    # Optional: A final re-ranking could be done here on the combined set
+    
+    logger.info(f"Combined {len(internal_documents)} internal docs with {len(web_documents)} web docs.")
+    
+    return {"documents": combined_docs, "is_web_search": True}
+
 
 # --- Routers ---
 
@@ -383,14 +449,14 @@ def route_after_retrieval(state: GraphState) -> str:
     if state.get("needs_reranking"):
         return "rerank_documents"
     else:
-        return "self_correction_loop"
+        return "enter_retrieval_correction"
 
 def route_after_reranking(state: GraphState) -> str:
     logger.info("---ROUTER: ROUTE AFTER RE-RANKING---")
     if state.get("retrieval_success"):
         return "summarize"
     else:
-        return "self_correction_loop"
+        return "enter_retrieval_correction"
     
 def route_after_generation(state: GraphState) -> str:
     """
@@ -409,24 +475,41 @@ def route_after_safety_check(state: GraphState) -> str:
     if state.get("grounding_success"):
         return "END"
     else:
-        return "self_correction_loop"
+        return "enter_grounding_correction"
 
-def route_correction_strategy(state: GraphState) -> str:
+def route_retrieval_correction(state: GraphState) -> str:
     """
-    Routes to the next correction strategy based on the retry count.
+    Routes to the next retrieval correction strategy based on the retry count.
     """
-    logger.info("---ROUTER: ROUTE CORRECTION STRATEGY---")
-    retries = state.get("retries", 0)
+    logger.info("---ROUTER: ROUTE RETRIEVAL CORRECTION STRATEGY---")
+    retries = state.get("retrieval_retries", 0)
     
-    if retries == 0:
+    if retries == 1:
         logger.info("Correction Strategy 1: Query Transformation")
         return "transform_query"
-    elif retries == 1:
+    elif retries == 2:
         logger.info("Correction Strategy 2: HyDE")
         return "generate_hyde_document"
-    elif retries == 2:
+    elif retries == 3:
         logger.info("Correction Strategy 3: Web Search")
         return "web_search"
     else:
-        logger.warning("Max retries exceeded. Routing to failure handler.")
+        logger.warning("Max retrieval retries exceeded. Routing to failure handler.")
         return "handle_retrieval_failure"
+
+def route_grounding_correction(state: GraphState) -> str:
+    """
+    Routes to the next grounding correction strategy with an escalating approach.
+    """
+    logger.info("---ROUTER: ROUTE GROUNDING CORRECTION STRATEGY---")
+    retries = state.get("grounding_retries", 0)
+
+    if retries == 1: 
+        logger.info("Grounding Correction Strategy 1: Smart Retrieval & Re-Rank")
+        return "smart_retrieval"
+    elif retries == 2:
+        logger.info("Grounding Correction Strategy 2: Hybrid Context (Internal + Web)")
+        return "hybrid_context"
+    else:
+        logger.warning("Max grounding retries exceeded. Routing to failure handler.")
+        return "handle_grounding_failure"
