@@ -8,12 +8,15 @@ This project moves beyond simple RAG chains by implementing a stateful, decision
 
 ## **Core Features**
 
-* **Autonomous & Self-Correcting**: The agent can detect when its document retrieval has failed or is irrelevant and automatically triggers a multi-step self-correction loop to find a better answer.
-* **Adaptive RAG Strategies**: The agent has a toolkit of advanced RAG techniques it can deploy, including:
-    * **Conversational Query Rewriting**: Automatically transforms conversational follow-up questions into precise, standalone queries.
-    * **Relevance Re-ranking**: Uses a powerful Cross-Encoder model to sift through initial search results and select only the most relevant documents to use as context.
-    * **Hypothetical Document Embeddings (HyDE)**: Generates a hypothetical "perfect" answer to improve the relevance of the document search.
-    * **Tool Use (Web Search)**: As a final fallback, the agent can use the Tavily Search API to find answers from the internet if the information is not present in the local documents.
+* **Autonomous & Multi-Layered Self-Correction**: The agent intelligently detects two distinct types of failures—**retrieval failure** and **grounding failure**—and triggers a dedicated, multi-step self-correction loop for each. This ensures the right recovery strategy is used for the right problem.
+* **Adaptive RAG Strategies**: The agent has a toolkit of advanced RAG techniques it can deploy based on the specific failure:
+    * **For Retrieval Failures**:
+        * **Conversational Query Rewriting**: Transforms conversational follow-ups into precise, standalone queries.
+        * **Hypothetical Document Embeddings (HyDE)**: Generates a hypothetical "perfect" answer to improve search relevance.
+        * **Tool Use (Web Search)**: As a final fallback, uses the Tavily Search API to find answers if information is missing from local documents.
+    * **For Grounding Failures**:
+        * **Smart Retrieval & Re-ranking**: Deploys a more powerful cross-encoder model to perform a deeper, more accurate search of the internal knowledge base.
+        * **Hybrid Context Synthesis**: Intelligently combines the best internal documents with fresh web search results to create a rich, synthesized context for generating a grounded answer.
 * **Structured Output & Grounding**: The agent uses LLMs with structured output (Pydantic) to ensure reliable decision-making and to perform a final grounding check, programmatically adding citations and verifying the factual accuracy of every claim.
 * **Local-First & Containerized**: The entire application, including the Weaviate vector database, runs locally in a containerized environment using Docker, ensuring data privacy, consistency, and portability.
 * **Memory-Efficient Ingestion**: A streaming approach is used to parse and chunk large documents, allowing for the ingestion of very large files without overwhelming the system's memory.
