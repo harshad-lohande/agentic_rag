@@ -5,6 +5,9 @@ description = "A production-grade agentic RAG system."
 authors = ["Harshad Lohande <lohande.harshad@gmail.com>"]
 readme = "README.md"
 package-mode = false
+packages = [
+    {include = "agentic_rag", from = "src"},
+]
 
 [tool.poetry.dependencies]
 python = "3.12.*"
@@ -40,6 +43,10 @@ pytest = "^8.4.1"
 pytest-mock = "^3.14.1"
 fpdf = "^1.7.2"
 httpx = "^0.28.1"
+
+[tool.poetry.scripts]
+ingest = "scripts.run_ingestion:main"
+delete-index = "scripts.delete_indexed_data:main"
 
 [build-system]
 requires = ["poetry-core"]
