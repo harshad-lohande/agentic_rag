@@ -34,8 +34,6 @@ services:
       - TZ=Asia/Kolkata
     volumes:
       - ./data:/app/data
-      - ./app:/app/app
-      - ./config.py:/app/config.py
     depends_on:
       # Re-enable the conditional dependency
       weaviate:
