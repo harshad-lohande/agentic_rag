@@ -20,7 +20,6 @@ This project moves beyond simple RAG chains by implementing a stateful, decision
 * **Structured Output & Grounding**: The agent uses LLMs with structured output (Pydantic) to ensure reliable decision-making and to perform a final grounding check, programmatically adding citations and verifying the factual accuracy of every claim.
 * **Local-First & Containerized**: The entire application, including the Weaviate vector database, runs locally in a containerized environment using Docker, ensuring data privacy, consistency, and portability.
 * **Memory-Efficient Ingestion**: A streaming approach is used to parse and chunk large documents, allowing for the ingestion of very large files without overwhelming the system's memory.
-* **Structured Logging**: All application events are logged in a structured JSON format for easy monitoring and analysis.
 * **Built-in Evaluation Framework**: The project includes an evaluation suite using the RAGAS framework to quantitatively measure the performance of the RAG pipeline.
 * **Conversational Memory**: The agent remembers the context of previous interactions in a session, allowing for natural, multi-turn follow-up questions.
 * **Structured Logging**: All application events are logged in a structured JSON format, making it easy to monitor, query, and analyze the system's behavior in a production environment.
