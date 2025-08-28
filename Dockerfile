@@ -9,7 +9,7 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=true
 
 # Install poetry
-RUN pip install --no-cache-dir "poetry==1.8.2"
+RUN pip install --no-cache-dir "poetry==2.1.4"
 
 # Copy only dependency files first to leverage Docker's layer caching
 COPY pyproject.toml poetry.lock ./
