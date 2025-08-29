@@ -1,4 +1,4 @@
-# app/agentic_workflow.py
+# src/agentic_rag/app/agentic_workflow.py
 
 from typing import List, Literal
 from langchain_core.documents import Document

@@ -1,4 +1,4 @@
-# app/document_parser.py
+# src/agentic_rag/app/document_parser.py
 
 from pathlib import Path
 from typing import Dict, Any, Iterator

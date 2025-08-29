@@ -1,4 +1,4 @@
-# evaluation/ground_truth.py
+# src/agentic_rag/evaluation/ground_truth.py
 
 def get_ground_truth_data():
     """

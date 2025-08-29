@@ -1,4 +1,4 @@
-# app/retriever.py
+# src/agentic_rag/app/retriever.py
 
 import weaviate
 from langchain_weaviate.vectorstores import WeaviateVectorStore

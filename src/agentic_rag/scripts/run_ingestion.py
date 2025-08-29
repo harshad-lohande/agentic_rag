@@ -1,4 +1,4 @@
-# scripts/run_ingestion.py
+# src/agentic_rag/scripts/run_ingestion.py
 
 from agentic_rag.logging_config import setup_logging
 from agentic_rag.app.ingestion import ingest_documents

@@ -1,4 +1,4 @@
-# app/delete_indexed_data.py
+# src/agentic_rag/scripts/delete_indexed_data.py
 
 import weaviate
 from agentic_rag.config import settings
@@ -32,7 +32,9 @@ def clear_weaviate_index():
         if 'client' in locals() and client.is_connected():
             client.close()
 
-if __name__ == '__main__':
-    # Initialize logging when the script is run directly
+def main():
     setup_logging()
     clear_weaviate_index()
+
+if __name__ == '__main__':
+    main()

@@ -1,4 +1,4 @@
-# app/ingestion.py
+# src/agentic_rag/app/ingestion.py
 
 import os
 import weaviate

@@ -1,3 +1,5 @@
+# src/agentic_rag/evaluation/evaluate.py
+
 import pandas as pd
 from datasets import Dataset
 from ragas import evaluate

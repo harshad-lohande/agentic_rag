@@ -1,4 +1,4 @@
-# evaluation/evaluation_ui.py
+# src/agentic_rag/evaluation/evaluation_ui.py
 
 import streamlit as st
 import pandas as pd

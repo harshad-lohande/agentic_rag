@@ -1,4 +1,4 @@
-# app/api.py
+# src/agentic_rag/app/api.py
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI

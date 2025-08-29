@@ -1,4 +1,4 @@
-# app/chunking_strategy.py
+# src/agentic_rag/app/chunking_strategy.py
 
 from typing import List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
