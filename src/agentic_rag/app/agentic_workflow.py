@@ -3,7 +3,7 @@
 from typing import List, Literal
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.graph import MessagesState, END
+from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -96,7 +96,6 @@ def transform_query(state: GraphState) -> dict:
     that is optimized for vector retrieval.
     """
     logger.info("---NODE: TRANSFORM QUERY---")
-    last_message = state['messages'][-1].content
     conversation_history = format_messages_for_llm(state['messages'])
 
     prompt = ChatPromptTemplate.from_template(

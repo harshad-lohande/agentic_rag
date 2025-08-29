@@ -1,6 +1,5 @@
 # src/agentic_rag/evaluation/evaluate.py
 
-import pandas as pd
 from datasets import Dataset
 from ragas import evaluate
 # Import the specific metric classes
@@ -12,7 +11,6 @@ from ragas.metrics import (
 )
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
-from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 import warnings
 
