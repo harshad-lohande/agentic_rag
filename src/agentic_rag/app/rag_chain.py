@@ -5,9 +5,11 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.vectorstores import VectorStoreRetriever
 from agentic_rag.app.llm_provider import get_llm
 
+
 def format_docs(docs):
     """Combines the content of multiple documents into a single string."""
     return "\n\n".join(doc.page_content for doc in docs)
+
 
 def create_rag_chain(retriever: VectorStoreRetriever, llm=None):
     """

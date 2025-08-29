@@ -35,7 +35,11 @@ if os.path.exists(RESULTS_FILE):
 
     # --- Display a summary of the results ---
     st.header("Results Summary")
-    summary_df = df[["faithfulness", "answer_relevancy", "context_recall", "context_precision"]].mean().to_frame('Average Score')
+    summary_df = (
+        df[["faithfulness", "answer_relevancy", "context_recall", "context_precision"]]
+        .mean()
+        .to_frame("Average Score")
+    )
     st.dataframe(summary_df)
 
 

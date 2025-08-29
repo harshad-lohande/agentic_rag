@@ -4,6 +4,7 @@ import weaviate
 from agentic_rag.config import settings
 from agentic_rag.logging_config import setup_logging, logger
 
+
 def clear_weaviate_index():
     """
     Connects to Weaviate and deletes all data from the specified index.
@@ -11,8 +12,7 @@ def clear_weaviate_index():
     try:
         # Connect to your local Weaviate instance
         client = weaviate.connect_to_local(
-            host=settings.WEAVIATE_HOST,
-            port=settings.WEAVIATE_PORT
+            host=settings.WEAVIATE_HOST, port=settings.WEAVIATE_PORT
         )
 
         index_name = settings.INDEX_NAME
@@ -29,12 +29,14 @@ def clear_weaviate_index():
     except Exception as e:
         logger.error(f"An error occurred: {e}", exc_info=True)
     finally:
-        if 'client' in locals() and client.is_connected():
+        if "client" in locals() and client.is_connected():
             client.close()
+
 
 def main():
     setup_logging()
     clear_weaviate_index()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

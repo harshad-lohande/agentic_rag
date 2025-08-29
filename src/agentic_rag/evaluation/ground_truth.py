@@ -1,5 +1,6 @@
 # src/agentic_rag/evaluation/ground_truth.py
 
+
 def get_ground_truth_data():
     """
     Provides a sample ground truth dataset for RAG evaluation.
@@ -11,7 +12,7 @@ def get_ground_truth_data():
             "ground_truth_answer": "The unique structure of MCTs (medium-chain triglycerides) make them extremely beneficial.\n"
             "They are more easily absorbed by the body and can be used as a quick source of energy.\n"
             "Since they don’t require to be processed by digestive enzymes, the body and brain use them almost immediately.\n"
-            "LCTs (long-chain triglycerides), on the other hand, have more carbon atoms. They are more complex and take longer to digest."
+            "LCTs (long-chain triglycerides), on the other hand, have more carbon atoms. They are more complex and take longer to digest.",
         },
         {
             "question": "How do MCTs actually function in burning fat?",
@@ -28,7 +29,7 @@ def get_ground_truth_data():
             "long-chain triglycerides, they have a very low tendency to deposit as body fat.\n"
             "When study participants were given MCTs in one trial, the results conveyed that the \n"
             "subjects increased their ability to burn fat, improved their energy expenditure, \n"
-            "and lost more adipose body fat compared to those who didn’t take MCTs — and kept it off."
+            "and lost more adipose body fat compared to those who didn’t take MCTs — and kept it off.",
         },
         {
             "question": "Other than fat loss, what are the other benefits of MCTs?",
@@ -41,6 +42,6 @@ def get_ground_truth_data():
             "4. Alleviating Depression: MCTs have shown to help alleviate depression due to their antioxidant properties.\n"
             "5. Optimize Intestinal Health: MCTs can help optimize intestinal health by improving gut microbiota.\n"
             "Among other things, your good bacteria produce dozens of neurotransmitters, \n"
-            "including more than 90% of your total serotonin and 50% of your dopamine."
-        }
+            "including more than 90% of your total serotonin and 50% of your dopamine.",
+        },
     ]

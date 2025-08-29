@@ -5,6 +5,7 @@ from typing import Dict, Any, Iterator
 import docx
 from pypdf import PdfReader
 
+
 class DocumentParser:
     """
     A class to parse different document types and extract text and metadata.
@@ -65,7 +66,7 @@ class DocumentParser:
 
     def _stream_txt(self, path: Path, chunk_size: int = 4096) -> Iterator[str]:
         """Streams text from a TXT file in chunks."""
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:

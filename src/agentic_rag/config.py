@@ -3,8 +3,11 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
 
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # --- Provider Settings ---
     LLM_PROVIDER: Literal["openai", "google"] = "openai"
@@ -37,5 +40,6 @@ class Settings(BaseSettings):
     CROSS_ENCODER_MODEL_SMALL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     CROSS_ENCODER_MODEL_LARGE: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
     CROSS_ENCODER_MODEL_ROBERTA: str = "cross-encoder/stsb-roberta-large"
+
 
 settings = Settings()

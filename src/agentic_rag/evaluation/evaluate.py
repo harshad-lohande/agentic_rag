@@ -2,6 +2,7 @@
 
 from datasets import Dataset
 from ragas import evaluate
+
 # Import the specific metric classes
 from ragas.metrics import (
     Faithfulness,
@@ -27,6 +28,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Initialize logging
 setup_logging()
+
 
 def run_evaluation():
     """
@@ -73,14 +75,17 @@ def run_evaluation():
 
     # 4. Initialize metrics with the required models
     evaluation_llm = LangchainLLMWrapper(get_llm(fast_model=True))
-    evaluation_embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL))
-    
+    evaluation_embeddings = LangchainEmbeddingsWrapper(
+        HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    )
+
     # Explicitly create and configure each metric
     faithfulness_metric = Faithfulness(llm=evaluation_llm)
-    answer_relevancy_metric = AnswerRelevancy(llm=evaluation_llm, embeddings=evaluation_embeddings)
+    answer_relevancy_metric = AnswerRelevancy(
+        llm=evaluation_llm, embeddings=evaluation_embeddings
+    )
     context_recall_metric = ContextRecall(llm=evaluation_llm)
     context_precision_metric = ContextPrecision(llm=evaluation_llm)
-
 
     # 5. Run the Evaluation
     logger.info("--- Running RAGAS Evaluation ---")
