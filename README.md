@@ -146,14 +146,31 @@ Refer the .env.example
 
 3.  **Ingest Your Data**: Run this script to process your documents and load them into the vector database.
     ```bash
-    poetry run python run_ingestion.py
+    poetry run python -m agentic_rag.scripts.run_ingestion
     ```
+    or
+
+    ```bash
+    poetry run ingest
+    ```
+
 
 4.  **Launch the UI**: Start the Streamlit user interface.
     ```bash
-    poetry run streamlit run ui.py
+    poetry run streamlit run ui/streamlit_app.py
     ```
     Navigate to **http://localhost:8501** in your browser to start your conversation.
+
+
+5.  **Delete ingested data**: Run this script if you need to delete the indexed data.
+    ```bash
+    poetry run python -m agentic_rag.scripts.delete_indexed_data
+    ```
+    or
+
+    ```bash
+    poetry run delete-index
+    ```
 
 ---
 
@@ -174,13 +191,13 @@ The evaluation measures the following key metrics:
     Run the following command from the root of the project. This will run the RAG chain against a ground truth dataset and save the results to a `ragas_evaluation_results.csv` file.
 
     ```bash
-    poetry run python -m evaluation.evaluate
+    poetry run python -m agentic_rag.evaluation.evaluate
     ```
 
 2.  **Visualize the Results:**
     To view the results in a user-friendly web interface, run the following command:
     ```bash
-    poetry run streamlit run evaluation/evaluation_ui.py
+    poetry run streamlit run src/agentic_rag/evaluation/evaluation_ui.py
     ```
     This will start a Streamlit application where you can view the evaluation metrics in a clean, interactive table.
 
