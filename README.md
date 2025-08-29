@@ -57,6 +57,22 @@ The architecture includes:
 
 ---
 
+## **Continuous Integration (CI)**
+
+This project includes a Continuous Integration (CI) pipeline using GitHub Actions to ensure code quality and stability. The pipeline automatically runs on every push and pull request to the main branch.
+
+### **CI Pipeline Stages:**
+
+1. **Lint & Format Check:** The code is automatically checked for style consistency and formatting errors using Ruff.
+
+2. **Unit Testing:** Although I've carried out unit and integration tests locally and used placeholder for this step. You can push `tests/` directory containing tests you've written to the remote repo and make a slight change in `ci.yml` in `Run Unit Tests with Pytest` step to run  automated tests using Pytest to verify the correctness of individual as well as integrated components.
+
+3. **(Roadmap) AI Quality Evaluation:** The pipeline is designed to be extended to automatically run the RAGAS evaluation suite, preventing deployments that would degrade the AI's answer quality.
+
+This automated process ensures that all contributions are held to a high standard, making the project more robust and maintainable.
+
+---
+
 ## **Setup and Installation (Ubuntu/Linux)**
 
 This guide provides detailed instructions to set up the project from scratch.
