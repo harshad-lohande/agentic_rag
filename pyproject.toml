@@ -42,6 +42,7 @@ pytest = "^8.4.1"
 pytest-mock = "^3.14.1"
 fpdf = "^1.7.2"
 httpx = "^0.28.1"
+ruff = "^0.12.11"
 
 [tool.poetry.scripts]
 ingest = "agentic_rag.scripts.run_ingestion:main"
