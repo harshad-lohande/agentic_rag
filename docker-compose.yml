@@ -23,10 +23,36 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:8.2.1-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # These now point to the service names within the Docker network
+      - WEAVIATE_HOST=weaviate
+      - REDIS_HOST=redis
+      - TZ=Asia/Kolkata
+    depends_on:
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # A separate service for running the one-off ingestion task
+  ingestion-worker:
+    build: .
     env_file:
       - .env
     environment:
@@ -35,6 +61,8 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      # Re-enable the conditional dependency
       weaviate:
         condition: service_healthy
+    # This command runs the ingestion script and then the container exits.
+    # In the cloud, this would be a scheduled task.
+    command: ["python", "-m", "agentic_rag.scripts.run_ingestion"]
