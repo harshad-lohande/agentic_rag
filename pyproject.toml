@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "A production-grade agentic RAG system."
 authors = ["Harshad Lohande <lohande.harshad@gmail.com>"]
 readme = "README.md"
-package-mode = false
 packages = [
     {include = "agentic_rag", from = "src"},
 ]
@@ -54,3 +53,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+filterwarnings = [
+    "ignore:Protobuf gencode version.*:UserWarning",
+]
