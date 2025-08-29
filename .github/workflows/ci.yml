@@ -1,6 +1,7 @@
 name: Continuous Integration
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -21,19 +22,17 @@ jobs:
           python-version: '3.12'
           cache: 'poetry'
 
+      - name: Install Poetry
+        run: pip install poetry
+
       - name: Install dependencies
         run: poetry install
 
       - name: Lint with Ruff
-        run: |
-          # Install ruff if it's not in pyproject.toml, or add it to dev dependencies
-          pip install ruff
-          ruff check src/
+        run: poetry run ruff check src/
 
       - name: Format with Ruff
-        run: |
-          pip install ruff
-          ruff format --check src/
+        run: poetry run ruff format --check src/
 
       - name: Run Unit Tests with Pytest
         # This step is ready for when you add tests to a tests/ directory
