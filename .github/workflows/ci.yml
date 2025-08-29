@@ -23,7 +23,9 @@ jobs:
           cache: 'poetry'
 
       - name: Install Poetry
-        run: pip install poetry
+        uses: snok/install-poetry@v1 # <-- USE THIS ACTION
+        with:
+          version: '2.1.4'
 
       - name: Install dependencies
         run: poetry install
