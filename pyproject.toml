@@ -45,8 +45,8 @@ fpdf = "^1.7.2"
 httpx = "^0.28.1"
 
 [tool.poetry.scripts]
-ingest = "scripts.run_ingestion:main"
-delete-index = "scripts.delete_indexed_data:main"
+ingest = "agentic_rag.scripts.run_ingestion:main"
+delete-index = "agentic_rag.scripts.delete_indexed_data:main"
 
 [build-system]
 requires = ["poetry-core"]
