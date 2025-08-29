@@ -1,6 +1,10 @@
-# app/logging_config.py
+# src/agentic_rag/logging_config.py
 
 import logging.config
+import warnings
+
+# Suppress the specific Protobuf UserWarning from the gRPC libraries
+warnings.filterwarnings("ignore", message="Protobuf gencode version.*")
 
 def setup_logging():
     """
