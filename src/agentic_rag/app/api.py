@@ -31,9 +31,11 @@ from agentic_rag.app.agentic_workflow import (
     smart_retrieval_and_rerank,
     hybrid_context_retrieval,
 )
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 import uuid
 from agentic_rag.logging_config import setup_logging, logger
+from agentic_rag.config import settings
+from agentic_rag.app.middlewares import RequestIDMiddleware
 
 # --- Setup Logging ---
 setup_logging()
@@ -43,129 +45,141 @@ setup_logging()
 async def lifespan(app: FastAPI):
     logger.info("--- Building and compiling autonomous LangGraph app at startup ---")
 
-    workflow = StateGraph(GraphState)
+    # --- Use Redis for persistent, shareable state ---
+    async with AsyncRedisSaver.from_conn_string(
+        f"redis://{settings.REDIS_HOST}:6379"
+    ) as checkpointer:
+        # This is the critical setup step that was missing.
+        await checkpointer.asetup()
 
-    # --- Add all ACTION nodes to the graph ---
-    workflow.add_node("classify_query", classify_query)
-    workflow.add_node("transform_query", transform_query)
-    workflow.add_node("generate_hyde_document", generate_hyde_document)
-    workflow.add_node("web_search", web_search)
-    workflow.add_node("retrieve_docs", retrieve_documents)
-    workflow.add_node("rerank_documents", grade_and_rerank_documents)
-    workflow.add_node("summarize_history", summarize_history)
-    workflow.add_node("generate_answer", generate_answer)
-    workflow.add_node("safety_check", grounding_and_safety_check)
-    workflow.add_node("web_search_safety_check", web_search_safety_check)
+        workflow = StateGraph(GraphState)
 
-    # Nodes for the retrieval correction loop
-    workflow.add_node("enter_retrieval_correction", increment_retrieval_retry_counter)
-    workflow.add_node("handle_retrieval_failure", handle_retrieval_failure)
+        # --- Add all ACTION nodes to the graph ---
+        workflow.add_node("classify_query", classify_query)
+        workflow.add_node("transform_query", transform_query)
+        workflow.add_node("generate_hyde_document", generate_hyde_document)
+        workflow.add_node("web_search", web_search)
+        workflow.add_node("retrieve_docs", retrieve_documents)
+        workflow.add_node("rerank_documents", grade_and_rerank_documents)
+        workflow.add_node("summarize_history", summarize_history)
+        workflow.add_node("generate_answer", generate_answer)
+        workflow.add_node("safety_check", grounding_and_safety_check)
+        workflow.add_node("web_search_safety_check", web_search_safety_check)
 
-    # Nodes for the grounding correction loop
-    workflow.add_node("enter_grounding_correction", increment_grounding_retry_counter)
-    workflow.add_node("smart_retrieval", smart_retrieval_and_rerank)
-    workflow.add_node("hybrid_context", hybrid_context_retrieval)
-    workflow.add_node("handle_grounding_failure", handle_grounding_failure)
+        # Nodes for the retrieval correction loop
+        workflow.add_node(
+            "enter_retrieval_correction", increment_retrieval_retry_counter
+        )
+        workflow.add_node("handle_retrieval_failure", handle_retrieval_failure)
 
-    # --- Set up the graph's edges and conditional routing ---
-    workflow.set_entry_point("classify_query")
+        # Nodes for the grounding correction loop
+        workflow.add_node(
+            "enter_grounding_correction", increment_grounding_retry_counter
+        )
+        workflow.add_node("smart_retrieval", smart_retrieval_and_rerank)
+        workflow.add_node("hybrid_context", hybrid_context_retrieval)
+        workflow.add_node("handle_grounding_failure", handle_grounding_failure)
 
-    workflow.add_conditional_edges(
-        "classify_query",
-        route_for_retrieval,
-        {"transform_query": "transform_query", "retrieve": "retrieve_docs"},
-    )
+        # --- Set up the graph's edges and conditional routing ---
+        workflow.set_entry_point("classify_query")
 
-    workflow.add_edge("transform_query", "retrieve_docs")
+        workflow.add_conditional_edges(
+            "classify_query",
+            route_for_retrieval,
+            {"transform_query": "transform_query", "retrieve": "retrieve_docs"},
+        )
 
-    workflow.add_conditional_edges(
-        "retrieve_docs",
-        route_after_retrieval,
-        {
-            "rerank_documents": "rerank_documents",
-            "enter_retrieval_correction": "enter_retrieval_correction",
-        },
-    )
+        workflow.add_edge("transform_query", "retrieve_docs")
 
-    workflow.add_conditional_edges(
-        "rerank_documents",
-        route_after_reranking,
-        {
-            "summarize": "summarize_history",
-            "enter_retrieval_correction": "enter_retrieval_correction",
-        },
-    )
+        workflow.add_conditional_edges(
+            "retrieve_docs",
+            route_after_retrieval,
+            {
+                "rerank_documents": "rerank_documents",
+                "enter_retrieval_correction": "enter_retrieval_correction",
+            },
+        )
 
-    # --- Retrieval Self-Correction Loop ---
-    workflow.add_conditional_edges(
-        "enter_retrieval_correction",
-        route_retrieval_correction,
-        {
-            "transform_query": "transform_query",
-            "generate_hyde_document": "generate_hyde_document",
-            "web_search": "web_search",
-            "handle_retrieval_failure": "handle_retrieval_failure",
-        },
-    )
-    workflow.add_edge("generate_hyde_document", "retrieve_docs")
+        workflow.add_conditional_edges(
+            "rerank_documents",
+            route_after_reranking,
+            {
+                "summarize": "summarize_history",
+                "enter_retrieval_correction": "enter_retrieval_correction",
+            },
+        )
 
-    # --- Generation Path ---
-    workflow.add_edge("summarize_history", "generate_answer")
-    workflow.add_edge("web_search", "summarize_history")
+        # --- Retrieval Self-Correction Loop ---
+        workflow.add_conditional_edges(
+            "enter_retrieval_correction",
+            route_retrieval_correction,
+            {
+                "transform_query": "transform_query",
+                "generate_hyde_document": "generate_hyde_document",
+                "web_search": "web_search",
+                "handle_retrieval_failure": "handle_retrieval_failure",
+            },
+        )
+        workflow.add_edge("generate_hyde_document", "retrieve_docs")
 
-    workflow.add_conditional_edges(
-        "generate_answer",
-        route_after_generation,
-        {
-            "safety_check": "safety_check",
-            "web_search_safety_check": "web_search_safety_check",
-        },
-    )
+        # --- Generation Path ---
+        workflow.add_edge("summarize_history", "generate_answer")
+        workflow.add_edge("web_search", "summarize_history")
 
-    # --- Advanced Grounding Self-Correction Loop ---
-    workflow.add_conditional_edges(
-        "safety_check",
-        route_after_safety_check,
-        {"END": END, "enter_grounding_correction": "enter_grounding_correction"},
-    )
-    workflow.add_conditional_edges(
-        "enter_grounding_correction",
-        route_grounding_correction,
-        {
-            "smart_retrieval": "smart_retrieval",
-            "hybrid_context": "hybrid_context",
-            "handle_grounding_failure": "handle_grounding_failure",
-        },
-    )
-    workflow.add_edge("smart_retrieval", "generate_answer")
-    workflow.add_edge("hybrid_context", "generate_answer")
+        workflow.add_conditional_edges(
+            "generate_answer",
+            route_after_generation,
+            {
+                "safety_check": "safety_check",
+                "web_search_safety_check": "web_search_safety_check",
+            },
+        )
 
-    # --- Endpoints ---
-    workflow.add_edge("handle_retrieval_failure", END)
-    workflow.add_edge("handle_grounding_failure", END)
-    workflow.add_edge("web_search_safety_check", END)
+        # --- Advanced Grounding Self-Correction Loop ---
+        workflow.add_conditional_edges(
+            "safety_check",
+            route_after_safety_check,
+            {"END": END, "enter_grounding_correction": "enter_grounding_correction"},
+        )
+        workflow.add_conditional_edges(
+            "enter_grounding_correction",
+            route_grounding_correction,
+            {
+                "smart_retrieval": "smart_retrieval",
+                "hybrid_context": "hybrid_context",
+                "handle_grounding_failure": "handle_grounding_failure",
+            },
+        )
+        workflow.add_edge("smart_retrieval", "generate_answer")
+        workflow.add_edge("hybrid_context", "generate_answer")
 
-    # --- Add a memory checkpointer ---
-    memory = InMemorySaver()
+        # --- Endpoints ---
+        workflow.add_edge("handle_retrieval_failure", END)
+        workflow.add_edge("handle_grounding_failure", END)
+        workflow.add_edge("web_search_safety_check", END)
 
-    app.state.langgraph_app = workflow.compile(checkpointer=memory)
+        app.state.langgraph_app = workflow.compile(checkpointer=checkpointer)
+        logger.info("--- LangGraph app compiled successfully ---")
 
-    logger.info("--- LangGraph app compiled successfully ---")
+        # --- Save the graph as a Mermaid markdown file ---
+        try:
+            graph_mermaid = app.state.langgraph_app.get_graph(xray=True).draw_mermaid()
+            with open("autonomous_rag_graph.md", "w") as f:
+                f.write(graph_mermaid)
+            logger.info("--- Graph visualization saved to autonomous_rag_graph.md ---")
+        except Exception as e:
+            logger.error(f"Failed to generate graph visualization: {e}")
 
-    # --- Save the graph as a Mermaid markdown file ---
-    try:
-        graph_mermaid = app.state.langgraph_app.get_graph(xray=True).draw_mermaid()
-        with open("autonomous_rag_graph.md", "w") as f:
-            f.write(graph_mermaid)
-        logger.info("--- Graph visualization saved to autonomous_rag_graph.md ---")
-    except Exception as e:
-        logger.error(f"Failed to generate graph visualization: {e}")
+        yield
 
-    yield
-    logger.info("--- Application shutdown ---")
+
+logger.info("--- Application shutdown ---")
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Add the RequestIDMiddleware to the application
+app.add_middleware(RequestIDMiddleware)
 
 
 class QueryRequest(BaseModel):
@@ -192,7 +206,7 @@ async def query_endpoint(request: QueryRequest):
     inputs = {"messages": [HumanMessage(content=request.query)]}
     config = {"configurable": {"thread_id": session_id}}
 
-    final_state = langgraph_app.invoke(inputs, config=config)
+    final_state = await langgraph_app.ainvoke(inputs, config=config)
 
     answer = final_state["messages"][-1].content
 

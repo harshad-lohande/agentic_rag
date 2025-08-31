@@ -1,7 +1,17 @@
-# ui.py
+# ui/streamlit_app.py
 
 import streamlit as st
 import requests
+import sys
+import os
+
+# Add the project's 'src' directory to the Python path
+# This is necessary for the logging.ini to find the custom formatter
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+src_path = os.path.join(project_root, "src")
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
 from agentic_rag.logging_config import setup_logging
 
 # --- Setup Logging ---
