@@ -27,6 +27,8 @@ services:
     image: redis:8.2.1-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -44,6 +46,8 @@ services:
       - WEAVIATE_HOST=weaviate
       - REDIS_HOST=redis
       - TZ=Asia/Kolkata
+    volumes:
+      - ./data:/app/data
     depends_on:
       weaviate:
         condition: service_healthy
@@ -66,3 +70,7 @@ services:
     # This command runs the ingestion script and then the container exits.
     # In the cloud, this would be a scheduled task.
     command: ["python", "-m", "agentic_rag.scripts.run_ingestion"]
+
+# Define the named volume for Redis persistence
+volumes:
+  redis_data:
