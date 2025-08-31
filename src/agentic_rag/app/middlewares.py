@@ -9,11 +9,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 # A context variable to hold the request ID for the duration of a request.
 REQUEST_ID_CTX_VAR: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
 
+
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """
     Injects a unique X-Request-ID header into every request.
     This ID is then available throughout the application via a context variable.
     """
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         request_id = request.headers.get("X-Request-ID")
         if not request_id:

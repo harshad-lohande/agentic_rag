@@ -67,11 +67,15 @@ async def lifespan(app: FastAPI):
         workflow.add_node("web_search_safety_check", web_search_safety_check)
 
         # Nodes for the retrieval correction loop
-        workflow.add_node("enter_retrieval_correction", increment_retrieval_retry_counter)
+        workflow.add_node(
+            "enter_retrieval_correction", increment_retrieval_retry_counter
+        )
         workflow.add_node("handle_retrieval_failure", handle_retrieval_failure)
 
         # Nodes for the grounding correction loop
-        workflow.add_node("enter_grounding_correction", increment_grounding_retry_counter)
+        workflow.add_node(
+            "enter_grounding_correction", increment_grounding_retry_counter
+        )
         workflow.add_node("smart_retrieval", smart_retrieval_and_rerank)
         workflow.add_node("hybrid_context", hybrid_context_retrieval)
         workflow.add_node("handle_grounding_failure", handle_grounding_failure)
@@ -167,6 +171,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to generate graph visualization: {e}")
 
         yield
+
 
 logger.info("--- Application shutdown ---")
 
