@@ -7,10 +7,15 @@ __pycache__/
 # specific directories
 data/
 sample_docs/
-tests/
 weaviate_data/
 
 # specific files
 *.pyc
 *.csv
 *.ipynb
+
+# pytest cache
+.pytest_cache/
+
+# ruff cache
+.ruff_cache/

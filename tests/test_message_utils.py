@@ -1,6 +1,5 @@
 # tests/test_message_utils.py
 
-import pytest
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from agentic_rag.app.message_utils import (
