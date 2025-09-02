@@ -10,6 +10,15 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
+from agentic_rag.app.message_utils import (
+    _msg_type, 
+    get_message_content, 
+    get_last_message_content,
+    get_last_human_message_content,
+    get_last_ai_message_content,
+    get_last_completed_turn_messages,
+    create_replacement_message
+)
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
 
@@ -43,8 +52,10 @@ def format_messages_for_llm(messages: list) -> str:
     """Strips metadata and formats messages as a simple string for the LLM."""
     formatted = []
     for msg in messages:
-        role = "User" if msg.type == "human" else "Assistant"
-        formatted.append(f"{role}: {msg.content}")
+        msg_type = _msg_type(msg)
+        role = "User" if msg_type == "human" else "Assistant"
+        content = get_message_content(msg)
+        formatted.append(f"{role}: {content}")
     return "\n".join(formatted)
 
 
@@ -77,7 +88,7 @@ def classify_query(state: GraphState) -> dict:
     a simple standalone question or a complex one that requires conversation history.
     """
     logger.info("---NODE: CLASSIFY QUERY---")
-    last_message = state["messages"][-1].content
+    last_message = get_last_message_content(state["messages"])
     conversation_history = format_messages_for_llm(state["messages"][:-1])
 
     prompt = ChatPromptTemplate.from_template(
@@ -138,7 +149,7 @@ def transform_query(state: GraphState) -> dict:
 def generate_hyde_document(state: GraphState) -> dict:
     """Generates a hypothetical answer to be used for retrieval."""
     logger.info("---NODE: GENERATE HYDE DOCUMENT---")
-    query = state.get("transformed_query") or state["messages"][-1].content
+    query = state.get("transformed_query") or get_last_message_content(state["messages"])
     prompt = ChatPromptTemplate.from_template(
         "Generate a concise, hypothetical answer to the following question: {question}"
     )
@@ -151,7 +162,7 @@ def generate_hyde_document(state: GraphState) -> dict:
 def web_search(state: GraphState) -> dict:
     """Performs a web search using the Tavily API."""
     logger.info("---NODE: WEB SEARCH---")
-    query = state.get("transformed_query") or state["messages"][-1].content
+    query = state.get("transformed_query") or get_last_message_content(state["messages"])
     tool = TavilySearchResults(max_results=3)
     documents = tool.invoke(query)
     # The tool returns a list of dicts, we need to convert them to Document objects
@@ -174,7 +185,7 @@ def retrieve_documents(state: GraphState) -> dict:
     query = (
         state.get("hyde_document")
         or state.get("transformed_query")
-        or state["messages"][-1].content
+        or get_last_message_content(state["messages"])
     )
 
     retriever, client = create_retriever()
@@ -196,7 +207,7 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     Re-ranks retrieved documents based on their relevance to the query using a Cross-Encoder.
     """
     logger.info("---NODE: RE-RANK DOCUMENTS---")
-    query = state.get("transformed_query") or state["messages"][-1].content
+    query = state.get("transformed_query") or get_last_message_content(state["messages"])
     documents = state["documents"]
 
     cross_encoder = HuggingFaceCrossEncoder(
@@ -237,7 +248,8 @@ def summarize_history(state: GraphState) -> dict:
     # For all subsequent turns, summarize only the last completed turn
     elif turn_count > 3:
         logger.info("---UPDATING SUMMARY---")
-        new_messages_to_summarize = messages[-3:-1]
+        # Use robust helper to get the last completed turn instead of fragile slicing
+        new_messages_to_summarize = get_last_completed_turn_messages(messages)
 
     if new_messages_to_summarize:
         summarization_prompt = ChatPromptTemplate.from_template(
@@ -276,7 +288,7 @@ def generate_answer(state: GraphState) -> dict:
     Node to generate an answer, now with corrected and simplified history.
     """
     logger.info("---NODE: GENERATE ANSWER---")
-    question = state["messages"][-1].content
+    question = get_last_human_message_content(state["messages"])
     documents = state["documents"]
     summary = state.get("summary", "")
     prompt_tokens = state.get("prompt_tokens", 0)
@@ -311,11 +323,8 @@ def generate_answer(state: GraphState) -> dict:
 
     rag_chain = prompt | llm
 
-    # Get the last COMPLETED turn (human/ai pair) for recent history
-    # Check if there are enough messages to form a complete previous turn
-    recent_history_messages = (
-        state["messages"][-3:-1] if len(state["messages"]) > 2 else []
-    )
+    # Get the last COMPLETED turn (human/ai pair) for recent history using robust helper
+    recent_history_messages = get_last_completed_turn_messages(state["messages"])
     formatted_recent_history = format_messages_for_llm(recent_history_messages)
 
     generation = rag_chain.invoke(
@@ -346,8 +355,8 @@ def grounding_and_safety_check(state: GraphState) -> dict:
     Sets a flag based on whether the answer is grounded in the context.
     """
     logger.info("---NODE: GROUNDING & SAFETY CHECK---")
-    question = state["messages"][-2].content
-    answer = state["messages"][-1].content
+    question = get_last_human_message_content(state["messages"])
+    answer = get_last_ai_message_content(state["messages"])
     documents = state["documents"]
 
     grounding_prompt = ChatPromptTemplate.from_template(
@@ -394,8 +403,10 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
+    # Replace the last assistant message instead of appending
+    replace_command = create_replacement_message(response.revised_answer)
     return {
-        "messages": [response.revised_answer],
+        **replace_command,
         "grounding_success": response.is_grounded,
     }
 
@@ -403,7 +414,7 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 def web_search_safety_check(state: GraphState) -> dict:
     """A simplified safety check for web search results that adds citations."""
     logger.info("---NODE: WEB SEARCH SAFETY CHECK---")
-    answer = state["messages"][-1].content
+    answer = get_last_ai_message_content(state["messages"])
     documents = state["documents"]
 
     cited_answer = f"{answer}\n\n**Sources:**\n"
@@ -411,25 +422,22 @@ def web_search_safety_check(state: GraphState) -> dict:
         source_url = doc.metadata.get("source", "N/A")
         cited_answer += f"[{i + 1}] {source_url}\n"
 
-    return {"messages": [cited_answer]}
+    # Replace the last assistant message instead of appending
+    return create_replacement_message(cited_answer)
 
 
 def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
-    return {
-        "messages": [
-            "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
-        ]
-    }
+    return create_replacement_message(
+        "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
+    )
 
 
 def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
-    return {
-        "messages": [
-            "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
-        ]
-    }
+    return create_replacement_message(
+        "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
+    )
 
 
 def increment_retrieval_retry_counter(state: GraphState) -> dict:
@@ -450,7 +458,7 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     Uses the larger cross-encoder model.
     """
     logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
-    query = state.get("transformed_query") or state["messages"][-1].content
+    query = state.get("transformed_query") or get_last_message_content(state["messages"])
     # Use the initial, unfiltered documents for re-ranking
     documents = state["initial_documents"]
 

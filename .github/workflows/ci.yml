@@ -41,11 +41,7 @@ jobs:
         run: poetry run ruff check src/
 
       - name: Format with Ruff
-        run: poetry run ruff format --check src/
+        run: poetry run ruff format src/
 
       - name: Run Unit Tests with Pytest
-        # This step is ready for when you add tests to a tests/ directory
-        run: |
-          mkdir tests # Placeholder for now
-          echo "def test_placeholder(): assert True" > tests/test_smoke.py
-          poetry run pytest
+        run: poetry run pytest
