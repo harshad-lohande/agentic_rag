@@ -455,28 +455,82 @@ def increment_grounding_retry_counter(state: GraphState) -> dict:
 def smart_retrieval_and_rerank(state: GraphState) -> dict:
     """
     A more powerful retrieval and re-ranking step for grounding correction.
-    Uses the larger cross-encoder model.
+    Uses the larger cross-encoder model with fresh retrieval instead of re-ranking existing documents.
     """
     logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
-    query = state.get("transformed_query") or get_last_message_content(state["messages"])
-    # Use the initial, unfiltered documents for re-ranking
-    documents = state["initial_documents"]
+    
+    # Build effective query: use transformed query if available, otherwise inline-transform
+    effective_query = state.get("transformed_query")
+    
+    if not effective_query:
+        logger.info("No transformed query found, applying inline transformation")
+        conversation_history = format_messages_for_llm(state["messages"])
+        
+        prompt = ChatPromptTemplate.from_template(
+            """You are an expert at rewriting conversational queries into standalone, optimized search queries.
 
+            Based on the conversation history,
+            rewrite the user's latest query into a clear, concise, and self-contained question 
+            that can be used for a vector search.
+
+            Conversation History:
+            {history}
+
+            Rewritten Query:
+            """
+        )
+        llm = get_llm(fast_model=True)
+        chain = prompt | llm
+        
+        result = chain.invoke({"history": conversation_history})
+        effective_query = result.content
+        logger.info(f"Inline transformed query: {effective_query}")
+    else:
+        logger.info(f"Using existing transformed query: {effective_query}")
+    
+    # Fallback to last human message if transformation failed
+    if not effective_query:
+        effective_query = get_last_human_message_content(state["messages"])
+        logger.info(f"Using fallback to last human message: {effective_query}")
+    
+    # Perform fresh retrieval with the effective query
+    retriever, client = create_retriever()
+    try:
+        documents = retriever.invoke(effective_query)
+    finally:
+        client.close()
+    
+    # Short-circuit if no documents found
+    if not documents:
+        logger.info("Fresh retrieval returned no documents")
+        return {
+            "documents": [],
+            "retrieval_success": False,
+            "is_web_search": False
+        }
+    
+    logger.info(f"Fresh retrieval found {len(documents)} documents, proceeding with re-ranking")
+    
+    # Re-rank documents with large cross-encoder
     cross_encoder = HuggingFaceCrossEncoder(
         model_name=settings.CROSS_ENCODER_MODEL_LARGE
     )
-    pairs = [[query, doc.page_content] for doc in documents]
+    pairs = [[effective_query, doc.page_content] for doc in documents]
     scores = cross_encoder.score(pairs)
     scored_docs = list(zip(documents, scores))
     scored_docs.sort(key=lambda x: x[1], reverse=True)
-    # Keep a slightly larger set of top documents for better context
+    # Keep top 4 documents for better context
     reranked_docs = [doc for doc, score in scored_docs[:4]]
 
     logger.info(
         f"Smart re-ranking complete. Selected top {len(reranked_docs)} documents."
     )
 
-    return {"documents": reranked_docs}
+    return {
+        "documents": reranked_docs,
+        "retrieval_success": bool(reranked_docs),
+        "is_web_search": False
+    }
 
 
 def hybrid_context_retrieval(state: GraphState) -> dict:

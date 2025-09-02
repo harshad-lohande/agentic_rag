@@ -2,11 +2,11 @@
 
 import logging.config
 import warnings
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from agentic_rag.app.middlewares import REQUEST_ID_CTX_VAR
 
 
-class CustomJsonFormatter(jsonlogger.JsonFormatter):
+class CustomJsonFormatter(JsonFormatter):
     """
     A custom JSON log formatter that adds the request_id from a context variable.
     """
