@@ -48,11 +48,14 @@ services:
       - TZ=Asia/Kolkata
     volumes:
       - ./data:/app/data
+      - ./src/agentic_rag:/app/agentic_rag
     depends_on:
       weaviate:
         condition: service_healthy
       redis:
         condition: service_healthy
+    command: ["uvicorn", "agentic_rag.app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
 
   # A separate service for running the one-off ingestion task
   ingestion-worker:
@@ -64,6 +67,7 @@ services:
       - TZ=Asia/Kolkata
     volumes:
       - ./data:/app/data
+      - ./src/agentic_rag:/app/agentic_rag
     depends_on:
       weaviate:
         condition: service_healthy
