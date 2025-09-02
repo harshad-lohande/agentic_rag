@@ -1,6 +1,6 @@
 # src/agentic_rag/app/message_utils.py
 
-from typing import List, Optional, Union, Any, Dict
+from typing import List, Optional, Union, Any, Dict, Callable
 from langchain_core.messages import BaseMessage, AIMessage
 
 
@@ -158,21 +158,64 @@ def get_last_completed_turn_messages(messages: List[Union[BaseMessage, Dict[str,
     return [human_msg, ai_msg]
 
 
-def replace_last_assistant_message(content: str, additional_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def replace_last_assistant_message(content: str, additional_kwargs: Optional[Dict[str, Any]] = None) -> Callable[[List[BaseMessage], List[BaseMessage]], List[BaseMessage]]:
     """
-    Create a new assistant message to replace the previous one.
+    Create a custom reducer function to REPLACE the last assistant message.
     
-    Note: This function returns a new message. For proper replacement behavior in
-    LangGraph, the message handling would need to be implemented at the graph level
-    or through custom reducers. For now, this returns the new message that should
-    replace the last assistant message.
+    This returns a function that can be used as a reducer in LangGraph to properly
+    replace the last AI message instead of appending a new one.
     
     Args:
         content: New content for the assistant message
         additional_kwargs: Optional additional parameters for the message
         
     Returns:
-        Dict with "messages" containing the new AIMessage
+        A reducer function that replaces the last AI message
+    """
+    if additional_kwargs is None:
+        additional_kwargs = {}
+    
+    def replace_reducer(existing_messages: List[BaseMessage], new_messages: List[BaseMessage]) -> List[BaseMessage]:
+        """Custom reducer that replaces the last AI message."""
+        # Start with existing messages
+        result = existing_messages.copy()
+        
+        # Find the last AI message index
+        last_ai_idx = -1
+        for i in range(len(result) - 1, -1, -1):
+            if is_ai_message(result[i]):
+                last_ai_idx = i
+                break
+        
+        # Create the replacement message
+        replacement_message = AIMessage(content=content, **additional_kwargs)
+        
+        if last_ai_idx >= 0:
+            # Replace the last AI message
+            result[last_ai_idx] = replacement_message
+        else:
+            # No AI message found, append normally
+            result.append(replacement_message)
+        
+        return result
+    
+    return replace_reducer
+
+
+def create_replacement_message(content: str, additional_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Create a replacement message update for LangGraph nodes.
+    
+    This creates a simpler structure that can be handled by the graph to replace
+    the last assistant message. The actual replacement logic should be implemented
+    at the graph level or through custom state management.
+    
+    Args:
+        content: New content for the assistant message
+        additional_kwargs: Optional additional parameters for the message
+        
+    Returns:
+        Dict with the new message and replacement flag
     """
     if additional_kwargs is None:
         additional_kwargs = {}
@@ -180,5 +223,8 @@ def replace_last_assistant_message(content: str, additional_kwargs: Optional[Dic
     # Create new AI message
     new_message = AIMessage(content=content, **additional_kwargs)
     
-    # Return in the standard MessagesState format
-    return {"messages": [new_message]}
+    # Return with replacement instruction
+    return {
+        "messages": [new_message],
+        "_replace_last_ai": True
+    }

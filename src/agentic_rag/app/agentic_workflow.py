@@ -17,7 +17,7 @@ from agentic_rag.app.message_utils import (
     get_last_human_message_content,
     get_last_ai_message_content,
     get_last_completed_turn_messages,
-    replace_last_assistant_message
+    create_replacement_message
 )
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
@@ -404,7 +404,7 @@ def grounding_and_safety_check(state: GraphState) -> dict:
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
     # Replace the last assistant message instead of appending
-    replace_command = replace_last_assistant_message(response.revised_answer)
+    replace_command = create_replacement_message(response.revised_answer)
     return {
         **replace_command,
         "grounding_success": response.is_grounded,
@@ -423,19 +423,19 @@ def web_search_safety_check(state: GraphState) -> dict:
         cited_answer += f"[{i + 1}] {source_url}\n"
 
     # Replace the last assistant message instead of appending
-    return replace_last_assistant_message(cited_answer)
+    return create_replacement_message(cited_answer)
 
 
 def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
-    return replace_last_assistant_message(
+    return create_replacement_message(
         "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
     )
 
 
 def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
-    return replace_last_assistant_message(
+    return create_replacement_message(
         "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
     )
 
