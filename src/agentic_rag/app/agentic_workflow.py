@@ -2,6 +2,7 @@
 
 from typing import List, Literal
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
@@ -394,8 +395,15 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
+    # Get the ID of the last AI message to replace it instead of appending
+    last_ai_message = state["messages"][-1]
+    revised_message = AIMessage(
+        content=response.revised_answer, 
+        id=last_ai_message.id
+    )
+
     return {
-        "messages": [response.revised_answer],
+        "messages": [revised_message],
         "grounding_success": response.is_grounded,
     }
 
@@ -411,24 +419,43 @@ def web_search_safety_check(state: GraphState) -> dict:
         source_url = doc.metadata.get("source", "N/A")
         cited_answer += f"[{i + 1}] {source_url}\n"
 
-    return {"messages": [cited_answer]}
+    # Get the ID of the last AI message to replace it instead of appending
+    last_ai_message = state["messages"][-1]
+    revised_message = AIMessage(
+        content=cited_answer, 
+        id=last_ai_message.id
+    )
+
+    return {"messages": [revised_message]}
 
 
 def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
+    
+    # Get the ID of the last AI message to replace it instead of appending
+    last_ai_message = state["messages"][-1]
+    failure_message = AIMessage(
+        content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies.",
+        id=last_ai_message.id
+    )
+    
     return {
-        "messages": [
-            "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
-        ]
+        "messages": [failure_message]
     }
 
 
 def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
+    
+    # Get the ID of the last AI message to replace it instead of appending
+    last_ai_message = state["messages"][-1]
+    failure_message = AIMessage(
+        content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question.",
+        id=last_ai_message.id
+    )
+    
     return {
-        "messages": [
-            "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
-        ]
+        "messages": [failure_message]
     }
 
 
