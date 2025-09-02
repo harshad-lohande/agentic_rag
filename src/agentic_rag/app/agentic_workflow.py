@@ -396,11 +396,16 @@ def grounding_and_safety_check(state: GraphState) -> dict:
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
     # Get the ID of the last AI message to replace it instead of appending
-    last_ai_message = state["messages"][-1]
-    revised_message = AIMessage(
-        content=response.revised_answer, 
-        id=last_ai_message.id
-    )
+    # This should always exist since grounding check follows generate_answer
+    if state["messages"] and state["messages"][-1].type == "ai":
+        last_ai_message = state["messages"][-1]
+        revised_message = AIMessage(
+            content=response.revised_answer, 
+            id=last_ai_message.id
+        )
+    else:
+        # Fallback - create new message (this shouldn't happen in current workflow)
+        revised_message = AIMessage(content=response.revised_answer)
 
     return {
         "messages": [revised_message],
@@ -420,11 +425,16 @@ def web_search_safety_check(state: GraphState) -> dict:
         cited_answer += f"[{i + 1}] {source_url}\n"
 
     # Get the ID of the last AI message to replace it instead of appending
-    last_ai_message = state["messages"][-1]
-    revised_message = AIMessage(
-        content=cited_answer, 
-        id=last_ai_message.id
-    )
+    # This should always exist since web search safety check follows generate_answer
+    if state["messages"] and state["messages"][-1].type == "ai":
+        last_ai_message = state["messages"][-1]
+        revised_message = AIMessage(
+            content=cited_answer, 
+            id=last_ai_message.id
+        )
+    else:
+        # Fallback - create new message (this shouldn't happen in current workflow)
+        revised_message = AIMessage(content=cited_answer)
 
     return {"messages": [revised_message]}
 
@@ -433,11 +443,18 @@ def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
     
     # Get the ID of the last AI message to replace it instead of appending
-    last_ai_message = state["messages"][-1]
-    failure_message = AIMessage(
-        content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies.",
-        id=last_ai_message.id
-    )
+    # This should always exist in the current workflow, but add defensive check
+    if state["messages"] and state["messages"][-1].type == "ai":
+        last_ai_message = state["messages"][-1]
+        failure_message = AIMessage(
+            content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies.",
+            id=last_ai_message.id
+        )
+    else:
+        # Fallback - create new message (this shouldn't happen in current workflow)
+        failure_message = AIMessage(
+            content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
+        )
     
     return {
         "messages": [failure_message]
@@ -448,11 +465,18 @@ def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
     
     # Get the ID of the last AI message to replace it instead of appending
-    last_ai_message = state["messages"][-1]
-    failure_message = AIMessage(
-        content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question.",
-        id=last_ai_message.id
-    )
+    # This should always exist in the current workflow, but add defensive check
+    if state["messages"] and state["messages"][-1].type == "ai":
+        last_ai_message = state["messages"][-1]
+        failure_message = AIMessage(
+            content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question.",
+            id=last_ai_message.id
+        )
+    else:
+        # Fallback - create new message (this shouldn't happen in current workflow)
+        failure_message = AIMessage(
+            content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
+        )
     
     return {
         "messages": [failure_message]
