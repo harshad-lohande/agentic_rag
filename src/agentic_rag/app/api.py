@@ -49,8 +49,7 @@ async def lifespan(app: FastAPI):
     async with AsyncRedisSaver.from_conn_string(
         f"redis://{settings.REDIS_HOST}:6379"
     ) as checkpointer:
-        # This is the critical setup step that was missing.
-        await checkpointer.asetup()
+        # await checkpointer.asetup()
 
         workflow = StateGraph(GraphState)
 
