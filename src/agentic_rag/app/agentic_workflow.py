@@ -337,12 +337,13 @@ def retrieve_documents(state: GraphState) -> dict:
 
     retriever, client = create_retriever()
     documents = retriever.invoke(query)
+    dedup_documents = deduplicate_documents(documents)
     client.close()
 
     needs_reranking = bool(documents)
     return {
-        "documents": documents,
-        "initial_documents": documents,
+        "documents": dedup_documents,
+        "initial_documents": dedup_documents,
         "needs_reranking": needs_reranking,
         "is_web_search": False,
         "hyde_document": None,
