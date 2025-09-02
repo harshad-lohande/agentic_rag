@@ -1,6 +1,7 @@
 # src/agentic_rag/app/agentic_workflow.py
 
-from typing import List, Literal
+import hashlib
+from typing import List, Literal, Dict, Tuple
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import MessagesState
@@ -57,6 +58,152 @@ def format_messages_for_llm(messages: list) -> str:
         content = get_message_content(msg)
         formatted.append(f"{role}: {content}")
     return "\n".join(formatted)
+
+
+# --- Helper functions for grounding correction improvements ---
+
+def get_document_dedup_key(doc: Document) -> str:
+    """
+    Generate a stable de-duplication key for a document.
+    Uses metadata in order of preference: source, file_name, path, id, or hash of content.
+    """
+    metadata = doc.metadata or {}
+    
+    # Try metadata fields in order of preference
+    for key in ["source", "file_name", "path", "id"]:
+        if key in metadata and metadata[key]:
+            return str(metadata[key])
+    
+    # Fallback to hash of page_content
+    content_hash = hashlib.md5(doc.page_content.encode('utf-8')).hexdigest()
+    return f"content_hash_{content_hash}"
+
+
+def deduplicate_documents(documents: List[Document]) -> List[Document]:
+    """
+    Remove duplicate documents based on deduplication key, keeping first occurrence.
+    Returns deduplicated list and logs counts.
+    """
+    if not documents:
+        return documents
+    
+    seen_keys = set()
+    deduplicated = []
+    
+    for doc in documents:
+        key = get_document_dedup_key(doc)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduplicated.append(doc)
+    
+    if len(deduplicated) != len(documents):
+        logger.info(f"Document deduplication: {len(documents)} -> {len(deduplicated)} documents")
+    
+    return deduplicated
+
+
+def apply_reciprocal_rank_fusion(doc_lists: List[List[Document]], k: int = 60) -> List[Document]:
+    """
+    Apply Reciprocal Rank Fusion (RRF) to merge multiple document lists.
+    Score formula: score(doc) = sum(1.0 / (k + rank_i)) across all lists where doc appears.
+    """
+    doc_scores: Dict[str, Tuple[Document, float]] = {}
+    
+    for doc_list in doc_lists:
+        for rank, doc in enumerate(doc_list, start=1):
+            dedup_key = get_document_dedup_key(doc)
+            score = 1.0 / (k + rank)
+            
+            if dedup_key in doc_scores:
+                # Add to existing score, keep first occurrence of document
+                doc_scores[dedup_key] = (doc_scores[dedup_key][0], doc_scores[dedup_key][1] + score)
+            else:
+                doc_scores[dedup_key] = (doc, score)
+    
+    # Sort by RRF score in descending order
+    sorted_docs = sorted(doc_scores.values(), key=lambda x: x[1], reverse=True)
+    fused_docs = [doc for doc, score in sorted_docs]
+    
+    logger.info(f"RRF fusion applied to {len(doc_lists)} lists, resulting in {len(fused_docs)} unique documents")
+    return fused_docs
+
+
+def jaccard_similarity(text1: str, text2: str) -> float:
+    """
+    Calculate Jaccard similarity between two texts using tokenized sets.
+    Tokenizes by splitting on whitespace and converts to lowercase.
+    """
+    tokens1 = set(text1.lower().split())
+    tokens2 = set(text2.lower().split())
+    
+    intersection = tokens1 & tokens2
+    union = tokens1 | tokens2
+    
+    if not union:
+        return 0.0
+    
+    return len(intersection) / len(union)
+
+
+def apply_diversity_filter(documents: List[Document], top_k: int = 4, similarity_threshold: float = 0.85) -> List[Document]:
+    """
+    Apply diversity filter to remove documents that are too similar to previously selected ones.
+    Uses Jaccard similarity with the specified threshold.
+    """
+    if not documents or top_k <= 0:
+        return documents[:top_k]
+    
+    selected = []
+    filtered_count = 0
+    
+    for doc in documents:
+        if len(selected) >= top_k:
+            break
+            
+        # Check similarity with already selected documents
+        is_too_similar = False
+        for selected_doc in selected:
+            similarity = jaccard_similarity(doc.page_content, selected_doc.page_content)
+            if similarity >= similarity_threshold:
+                is_too_similar = True
+                filtered_count += 1
+                break
+        
+        if not is_too_similar:
+            selected.append(doc)
+    
+    if filtered_count > 0:
+        logger.info(f"Diversity filter: {filtered_count} documents filtered for redundancy")
+    
+    return selected
+
+
+def inline_transform_query(original_query: str) -> str:
+    """
+    Inline transformation of query with drift-avoidance guard.
+    Uses the same pattern as transform_query but with explicit constraints.
+    """
+    prompt = ChatPromptTemplate.from_template(
+        """You are an expert at rewriting conversational queries into standalone, optimized search queries.
+
+        Rewrite the user's query into a clear, concise, and self-contained question 
+        that can be used for a vector search.
+
+        IMPORTANT: Preserve key entities, numbers, dates, and constraints from the user's question. 
+        Do not introduce new facts or assumptions.
+
+        Original Query: {query}
+
+        Rewritten Query:
+        """
+    )
+    
+    llm = get_llm(fast_model=True)
+    llm.temperature = 0.1  # Keep temperature low for consistency
+    chain = prompt | llm
+    
+    result = chain.invoke({"query": original_query})
+    return result.content
 
 
 # --- Updated GraphState with self-correction fields ---
@@ -455,33 +602,88 @@ def increment_grounding_retry_counter(state: GraphState) -> dict:
 def smart_retrieval_and_rerank(state: GraphState) -> dict:
     """
     A more powerful retrieval and re-ranking step for grounding correction.
-    Uses the larger cross-encoder model.
+    Performs dual fresh retrievals, applies RRF fusion, de-duplication, 
+    cross-encoder re-ranking, and diversity filtering.
     """
     logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
-    query = state.get("transformed_query") or get_last_message_content(state["messages"])
-    # Use the initial, unfiltered documents for re-ranking
-    documents = state["initial_documents"]
-
+    
+    # Build two effective queries
+    original_query = get_last_human_message_content(state["messages"])
+    transformed_query = state.get("transformed_query")
+    
+    # If transformed_query is missing, perform inline transformation
+    if not transformed_query:
+        logger.info("Performing inline query transformation with drift-avoidance guard")
+        transformed_query = inline_transform_query(original_query)
+        logger.info(f"Inline transformed query: {transformed_query}")
+    
+    # Perform two fresh retrievals
+    logger.info("Performing dual fresh retrievals")
+    
+    # First retrieval with original query
+    retriever1, client1 = create_retriever()
+    try:
+        original_docs = retriever1.invoke(original_query)
+        logger.info(f"Original query retrieved {len(original_docs)} documents")
+    finally:
+        client1.close()
+    
+    # Second retrieval with transformed query
+    retriever2, client2 = create_retriever()
+    try:
+        transformed_docs = retriever2.invoke(transformed_query)
+        logger.info(f"Transformed query retrieved {len(transformed_docs)} documents")
+    finally:
+        client2.close()
+    
+    # Document-level de-duplication before fusion
+    original_docs = deduplicate_documents(original_docs)
+    transformed_docs = deduplicate_documents(transformed_docs)
+    
+    # Apply Reciprocal Rank Fusion (RRF)
+    fused_docs = apply_reciprocal_rank_fusion([original_docs, transformed_docs], k=60)
+    
+    # Document-level de-duplication after fusion
+    fused_docs = deduplicate_documents(fused_docs)
+    
+    # Keep candidate pool for cross-encoder (e.g., top 8)
+    candidate_pool = fused_docs[:8]
+    logger.info(f"Selected top {len(candidate_pool)} candidates for cross-encoder re-ranking")
+    
+    if not candidate_pool:
+        logger.warning("No candidates available for cross-encoder re-ranking")
+        return {"documents": [], "retrieval_success": False, "is_web_search": False}
+    
+    # Large cross-encoder re-ranking
     cross_encoder = HuggingFaceCrossEncoder(
         model_name=settings.CROSS_ENCODER_MODEL_LARGE
     )
-    pairs = [[query, doc.page_content] for doc in documents]
+    # Use the transformed query for scoring (or original if transformation failed)
+    scoring_query = transformed_query or original_query
+    pairs = [[scoring_query, doc.page_content] for doc in candidate_pool]
     scores = cross_encoder.score(pairs)
-    scored_docs = list(zip(documents, scores))
+    scored_docs = list(zip(candidate_pool, scores))
     scored_docs.sort(key=lambda x: x[1], reverse=True)
-    # Keep a slightly larger set of top documents for better context
-    reranked_docs = [doc for doc, score in scored_docs[:4]]
-
-    logger.info(
-        f"Smart re-ranking complete. Selected top {len(reranked_docs)} documents."
-    )
-
-    return {"documents": reranked_docs}
+    reranked_docs = [doc for doc, score in scored_docs]
+    
+    logger.info(f"Cross-encoder re-ranking complete for {len(reranked_docs)} documents")
+    
+    # Simple diversity filter after cross-encoder (final top_k selection)
+    final_docs = apply_diversity_filter(reranked_docs, top_k=4, similarity_threshold=0.85)
+    
+    logger.info(f"Smart retrieval complete. Final selection: {len(final_docs)} documents")
+    
+    return {
+        "documents": final_docs, 
+        "retrieval_success": bool(final_docs), 
+        "is_web_search": False
+    }
 
 
 def hybrid_context_retrieval(state: GraphState) -> dict:
     """
     Combines the best internal documents with fresh web search results.
+    Includes document-level de-duplication when merging results.
     """
     logger.info("---NODE: HYBRID CONTEXT RETRIEVAL (GROUNDING CORRECTION)---")
     internal_documents = state["documents"]
@@ -490,16 +692,16 @@ def hybrid_context_retrieval(state: GraphState) -> dict:
     web_search_state = web_search(state)
     web_documents = web_search_state.get("documents", [])
 
-    # Combine and de-duplicate
+    # Combine documents
     combined_docs = internal_documents + web_documents
+    logger.info(f"Combined {len(internal_documents)} internal docs with {len(web_documents)} web docs")
 
-    # Optional: A final re-ranking could be done here on the combined set
+    # Document-level de-duplication after combining
+    deduplicated_docs = deduplicate_documents(combined_docs)
 
-    logger.info(
-        f"Combined {len(internal_documents)} internal docs with {len(web_documents)} web docs."
-    )
+    logger.info(f"Hybrid context retrieval complete. Final count: {len(deduplicated_docs)} documents")
 
-    return {"documents": combined_docs, "is_web_search": True}
+    return {"documents": deduplicated_docs, "is_web_search": True}
 
 
 # --- Routers ---
