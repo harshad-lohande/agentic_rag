@@ -19,7 +19,6 @@ from agentic_rag.app.message_utils import (
     get_last_human_message_content,
     get_last_ai_message_content,
     get_last_completed_turn_messages,
-    create_replacement_message,
 )
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
