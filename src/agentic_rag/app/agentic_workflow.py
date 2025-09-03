@@ -60,6 +60,48 @@ def format_messages_for_llm(messages: list) -> str:
     return "\n".join(formatted)
 
 
+# --- Token Usage Helper Functions ---
+def extract_token_usage_from_response(response) -> Dict[str, int]:
+    """
+    Extracts token usage from an LLM response.
+    Handles both regular responses and structured output responses.
+    Returns a dictionary with prompt_tokens, completion_tokens, and total_tokens.
+    """
+    token_usage = {}
+    
+    # For structured output, the response might be wrapped differently
+    if hasattr(response, 'response_metadata'):
+        token_usage = response.response_metadata.get("token_usage", {})
+    elif hasattr(response, '__pydantic_extra__') and 'response_metadata' in getattr(response, '__pydantic_extra__', {}):
+        # Some structured outputs store metadata in __pydantic_extra__
+        token_usage = response.__pydantic_extra__.get('response_metadata', {}).get("token_usage", {})
+    elif hasattr(response, '_response_metadata'):
+        # Alternative attribute name
+        token_usage = response._response_metadata.get("token_usage", {})
+    
+    return {
+        "prompt_tokens": token_usage.get("prompt_tokens", 0),
+        "completion_tokens": token_usage.get("completion_tokens", 0),
+        "total_tokens": token_usage.get("total_tokens", 0),
+    }
+
+
+def accumulate_token_usage(state: dict, new_tokens: Dict[str, int]) -> Dict[str, int]:
+    """
+    Accumulates token usage from state and new tokens.
+    Returns the updated token counts.
+    """
+    current_prompt = state.get("prompt_tokens", 0)
+    current_completion = state.get("completion_tokens", 0)
+    current_total = state.get("total_tokens", 0)
+    
+    return {
+        "prompt_tokens": current_prompt + new_tokens.get("prompt_tokens", 0),
+        "completion_tokens": current_completion + new_tokens.get("completion_tokens", 0),
+        "total_tokens": current_total + new_tokens.get("total_tokens", 0),
+    }
+
+
 # --- Helper functions for grounding correction improvements ---
 
 
@@ -272,10 +314,17 @@ def classify_query(state: GraphState) -> dict:
 
     result = chain.invoke({"history": conversation_history, "query": last_message})
 
+    # Extract and accumulate token usage
+    new_tokens = extract_token_usage_from_response(result)
+    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+
     is_complex = result.classification == "complex"
     logger.info(f"Query classified as: {'complex' if is_complex else 'simple'}")
 
-    return {"is_complex_query": is_complex}
+    return {
+        "is_complex_query": is_complex,
+        **accumulated_tokens,
+    }
 
 
 def transform_query(state: GraphState) -> dict:
@@ -314,10 +363,17 @@ def transform_query(state: GraphState) -> dict:
     chain = prompt | get_llm(fast_model=True)
     result = chain.invoke({"chat_history": history_for_prompt, "original": question})
 
+    # Extract and accumulate token usage
+    new_tokens = extract_token_usage_from_response(result)
+    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+
     rewritten = (
         result.content.strip() if hasattr(result, "content") else str(result).strip()
     )
-    return {"transformed_query": rewritten}
+    return {
+        "transformed_query": rewritten,
+        **accumulated_tokens,
+    }
 
 
 def generate_hyde_document(state: GraphState) -> dict:
@@ -332,7 +388,15 @@ def generate_hyde_document(state: GraphState) -> dict:
     llm = get_llm(fast_model=True)
     chain = prompt | llm
     result = chain.invoke({"question": query})
-    return {"hyde_document": result.content}
+    
+    # Extract and accumulate token usage
+    new_tokens = extract_token_usage_from_response(result)
+    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+    
+    return {
+        "hyde_document": result.content,
+        **accumulated_tokens,
+    }
 
 
 def web_search(state: GraphState) -> dict:
@@ -588,6 +652,10 @@ def grounding_and_safety_check(state: GraphState) -> dict:
         }
     )
 
+    # Extract and accumulate token usage
+    new_tokens = extract_token_usage_from_response(response)
+    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
     # Append the final assistant message ONLY when grounded
@@ -596,11 +664,13 @@ def grounding_and_safety_check(state: GraphState) -> dict:
             "messages": [AIMessage(content=response.revised_answer)],
             "grounding_success": True,
             "proposed_answer": None,
+            **accumulated_tokens,
         }
     else:
         # Do not append anything; move into correction loop
         return {
             "grounding_success": False,
+            **accumulated_tokens,
         }
 
 
