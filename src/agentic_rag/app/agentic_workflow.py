@@ -8,6 +8,7 @@ from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.messages import AIMessage  # NEW
 
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
@@ -224,6 +225,7 @@ class GraphState(MessagesState):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    proposed_answer: str | None = None  # NEW: hold draft answer before finalization
 
 
 # --- Agentic Nodes ---
@@ -265,32 +267,40 @@ def classify_query(state: GraphState) -> dict:
 
 def transform_query(state: GraphState) -> dict:
     """
-    Rewrites the user's query into a more precise, standalone question
-    that is optimized for vector retrieval.
+    Rewrite the latest user query to be fully self-contained.
+    We include a small recent history window (last completed human–AI pair) to resolve pronouns and references
+    with minimal token cost.
     """
-    logger.info("---NODE: TRANSFORM QUERY---")
-    conversation_history = format_messages_for_llm(state["messages"])
+    messages = state.get("messages", [])
+    # Extract the latest user question
+    question = get_last_human_message_content(messages)
 
+    # Use the last completed turn (one human + following AI) as light context for coref
+    # Fall back to empty if not available (e.g., first user turn)
+    try:
+        # get_last_completed_turn_messages should return [HumanMessage, AIMessage] for the previous completed turn
+        recent_turn = get_last_completed_turn_messages(messages, k=1)
+        recent_history = format_messages_for_llm(recent_turn)
+    except Exception:
+        recent_history = ""
+
+    # Feature toggle: allow disabling this extra context if needed (defaults to True)
+    use_recent_in_rewrite = bool(getattr(settings, "USE_RECENT_HISTORY_IN_REWRITE", True))
+    history_for_prompt = recent_history if use_recent_in_rewrite else ""
+
+    # Build the prompt and call LLM
     prompt = ChatPromptTemplate.from_template(
-        """You are an expert at rewriting conversational queries into standalone, optimized search queries.
-
-        Based on the conversation history,
-        rewrite the user's latest query into a clear, concise, and self-contained question 
-        that can be used for a vector search.
-
-        Conversation History:
-        {history}
-
-        Rewritten Query:
-        """
+        "You will rewrite the latest user question to be fully self-contained and unambiguous.\n"
+        "Use the recent conversation to resolve pronouns and references if provided.\n\n"
+        "Recent conversation (may be empty):\n{chat_history}\n\n"
+        "Original question:\n{original}\n\n"
+        "Rewritten question:"
     )
-    llm = get_llm(fast_model=True)
-    chain = prompt | llm
+    chain = prompt | get_llm(fast_model=True)
+    result = chain.invoke({"chat_history": history_for_prompt, "original": question})
 
-    result = chain.invoke({"history": conversation_history})
-    logger.info(f"Transformed query: {result.content}")
-
-    return {"transformed_query": result.content}
+    rewritten = result.content.strip() if hasattr(result, "content") else str(result).strip()
+    return {"transformed_query": rewritten}
 
 
 def generate_hyde_document(state: GraphState) -> dict:
@@ -434,6 +444,7 @@ def summarize_history(state: GraphState) -> dict:
 def generate_answer(state: GraphState) -> dict:
     """
     Node to generate an answer, now with corrected and simplified history.
+    IMPORTANT: Do not append to messages here. Save only a proposed_answer.
     """
     logger.info("---NODE: GENERATE ANSWER---")
     question = get_last_human_message_content(state["messages"])
@@ -443,7 +454,7 @@ def generate_answer(state: GraphState) -> dict:
     completion_tokens = state.get("completion_tokens", 0)
     total_tokens = state.get("total_tokens", 0)
 
-    prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information.
+    prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information
         
         Conversation Summary:
         {summary}
@@ -489,8 +500,9 @@ def generate_answer(state: GraphState) -> dict:
     completion_tokens += token_usage.get("completion_tokens", 0)
     total_tokens += token_usage.get("total_tokens", 0)
 
+    # Only store the proposed answer here; do not touch messages
     return {
-        "messages": [generation],
+        "proposed_answer": generation.content,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
@@ -500,11 +512,13 @@ def generate_answer(state: GraphState) -> dict:
 def grounding_and_safety_check(state: GraphState) -> dict:
     """
     Performs a grounding check using structured output and revises the answer.
-    Sets a flag based on whether the answer is grounded in the context.
+    Appends a single assistant message ONLY if grounded; otherwise appends nothing
+    (so that correction loops do not create extra messages).
     """
     logger.info("---NODE: GROUNDING & SAFETY CHECK---")
     question = get_last_human_message_content(state["messages"])
-    answer = get_last_ai_message_content(state["messages"])
+    # Prefer the proposed_answer (not yet appended to messages)
+    answer = state.get("proposed_answer") or get_last_ai_message_content(state["messages"])
     documents = state["documents"]
 
     grounding_prompt = ChatPromptTemplate.from_template(
@@ -551,18 +565,26 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
-    # Replace the last assistant message instead of appending
-    replace_command = create_replacement_message(response.revised_answer)
-    return {
-        **replace_command,
-        "grounding_success": response.is_grounded,
-    }
+    # Append the final assistant message ONLY when grounded
+    if response.is_grounded:
+        return {
+            "messages": [AIMessage(content=response.revised_answer)],
+            "grounding_success": True,
+            "proposed_answer": None,
+        }
+    else:
+        # Do not append anything; move into correction loop
+        return {
+            "grounding_success": False,
+        }
 
 
 def web_search_safety_check(state: GraphState) -> dict:
-    """A simplified safety check for web search results that adds citations."""
+    """A simplified safety check for web search results that adds citations.
+    Appends a single assistant message with citations."""
     logger.info("---NODE: WEB SEARCH SAFETY CHECK---")
-    answer = get_last_ai_message_content(state["messages"])
+    # Prefer the proposed_answer (not yet appended to messages)
+    answer = state.get("proposed_answer") or get_last_ai_message_content(state["messages"])
     documents = state["documents"]
 
     cited_answer = f"{answer}\n\n**Sources:**\n"
@@ -570,22 +592,33 @@ def web_search_safety_check(state: GraphState) -> dict:
         source_url = doc.metadata.get("source", "N/A")
         cited_answer += f"[{i + 1}] {source_url}\n"
 
-    # Replace the last assistant message instead of appending
-    return create_replacement_message(cited_answer)
+    # Append a single assistant message (no replacement)
+    return {
+        "messages": [AIMessage(content=cited_answer)],
+        "proposed_answer": None,
+    }
 
 
 def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
-    return create_replacement_message(
-        "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
-    )
+    return {
+        "messages": [
+            AIMessage(
+                content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
+            )
+        ]
+    }
 
 
 def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
-    return create_replacement_message(
-        "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
-    )
+    return {
+        "messages": [
+            AIMessage(
+                content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
+            )
+        ]
+    }
 
 
 def increment_retrieval_retry_counter(state: GraphState) -> dict:
