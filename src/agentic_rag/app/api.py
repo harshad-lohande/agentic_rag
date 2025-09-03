@@ -203,7 +203,10 @@ async def query_endpoint(request: QueryRequest):
     logger.info(f"Received query for session_id: {session_id}")
 
     inputs = {"messages": [HumanMessage(content=request.query)]}
-    config = {"configurable": {"thread_id": session_id}}
+    config = {"configurable": {"thread_id": session_id}, "checkpoint_ns": "dev"}
+    # logger.info("--- View the information stored by checkpointer ---")
+    # checkpoint_info = await langgraph_app.checkpointer.aget_tuple(config)
+    # logger.info(checkpoint_info)
 
     final_state = await langgraph_app.ainvoke(inputs, config=config)
 
