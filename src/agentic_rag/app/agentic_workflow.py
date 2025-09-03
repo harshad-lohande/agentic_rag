@@ -8,17 +8,17 @@ from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.messages import AIMessage  # NEW
 
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
 from agentic_rag.app.message_utils import (
-    _msg_type, 
-    get_message_content, 
+    _msg_type,
+    get_message_content,
     get_last_message_content,
     get_last_human_message_content,
     get_last_ai_message_content,
     get_last_completed_turn_messages,
-    create_replacement_message
 )
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
@@ -62,20 +62,21 @@ def format_messages_for_llm(messages: list) -> str:
 
 # --- Helper functions for grounding correction improvements ---
 
+
 def get_document_dedup_key(doc: Document) -> str:
     """
     Generate a stable de-duplication key for a document.
     Uses metadata in order of preference: source, file_name, path, id, or hash of content.
     """
     metadata = doc.metadata or {}
-    
+
     # Try metadata fields in order of preference
     for key in ["source", "file_name", "path", "id"]:
         if key in metadata and metadata[key]:
             return str(metadata[key])
-    
+
     # Fallback to hash of page_content
-    content_hash = hashlib.md5(doc.page_content.encode('utf-8')).hexdigest()
+    content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
     return f"content_hash_{content_hash}"
 
 
@@ -86,45 +87,54 @@ def deduplicate_documents(documents: List[Document]) -> List[Document]:
     """
     if not documents:
         return documents
-    
+
     seen_keys = set()
     deduplicated = []
-    
+
     for doc in documents:
         key = get_document_dedup_key(doc)
         if key not in seen_keys:
             seen_keys.add(key)
             deduplicated.append(doc)
-    
+
     if len(deduplicated) != len(documents):
-        logger.info(f"Document deduplication: {len(documents)} -> {len(deduplicated)} documents")
-    
+        logger.info(
+            f"Document deduplication: {len(documents)} -> {len(deduplicated)} documents"
+        )
+
     return deduplicated
 
 
-def apply_reciprocal_rank_fusion(doc_lists: List[List[Document]], k: int = 60) -> List[Document]:
+def apply_reciprocal_rank_fusion(
+    doc_lists: List[List[Document]], k: int = 60
+) -> List[Document]:
     """
     Apply Reciprocal Rank Fusion (RRF) to merge multiple document lists.
     Score formula: score(doc) = sum(1.0 / (k + rank_i)) across all lists where doc appears.
     """
     doc_scores: Dict[str, Tuple[Document, float]] = {}
-    
+
     for doc_list in doc_lists:
         for rank, doc in enumerate(doc_list, start=1):
             dedup_key = get_document_dedup_key(doc)
             score = 1.0 / (k + rank)
-            
+
             if dedup_key in doc_scores:
                 # Add to existing score, keep first occurrence of document
-                doc_scores[dedup_key] = (doc_scores[dedup_key][0], doc_scores[dedup_key][1] + score)
+                doc_scores[dedup_key] = (
+                    doc_scores[dedup_key][0],
+                    doc_scores[dedup_key][1] + score,
+                )
             else:
                 doc_scores[dedup_key] = (doc, score)
-    
+
     # Sort by RRF score in descending order
     sorted_docs = sorted(doc_scores.values(), key=lambda x: x[1], reverse=True)
     fused_docs = [doc for doc, score in sorted_docs]
-    
-    logger.info(f"RRF fusion applied to {len(doc_lists)} lists, resulting in {len(fused_docs)} unique documents")
+
+    logger.info(
+        f"RRF fusion applied to {len(doc_lists)} lists, resulting in {len(fused_docs)} unique documents"
+    )
     return fused_docs
 
 
@@ -135,31 +145,33 @@ def jaccard_similarity(text1: str, text2: str) -> float:
     """
     tokens1 = set(text1.lower().split())
     tokens2 = set(text2.lower().split())
-    
+
     intersection = tokens1 & tokens2
     union = tokens1 | tokens2
-    
+
     if not union:
         return 0.0
-    
+
     return len(intersection) / len(union)
 
 
-def apply_diversity_filter(documents: List[Document], top_k: int = 4, similarity_threshold: float = 0.85) -> List[Document]:
+def apply_diversity_filter(
+    documents: List[Document], top_k: int = 4, similarity_threshold: float = 0.85
+) -> List[Document]:
     """
     Apply diversity filter to remove documents that are too similar to previously selected ones.
     Uses Jaccard similarity with the specified threshold.
     """
     if not documents or top_k <= 0:
         return documents[:top_k]
-    
+
     selected = []
     filtered_count = 0
-    
+
     for doc in documents:
         if len(selected) >= top_k:
             break
-            
+
         # Check similarity with already selected documents
         is_too_similar = False
         for selected_doc in selected:
@@ -168,13 +180,15 @@ def apply_diversity_filter(documents: List[Document], top_k: int = 4, similarity
                 is_too_similar = True
                 filtered_count += 1
                 break
-        
+
         if not is_too_similar:
             selected.append(doc)
-    
+
     if filtered_count > 0:
-        logger.info(f"Diversity filter: {filtered_count} documents filtered for redundancy")
-    
+        logger.info(
+            f"Diversity filter: {filtered_count} documents filtered for redundancy"
+        )
+
     return selected
 
 
@@ -197,11 +211,11 @@ def inline_transform_query(original_query: str) -> str:
         Rewritten Query:
         """
     )
-    
+
     llm = get_llm(fast_model=True)
     llm.temperature = 0.1  # Keep temperature low for consistency
     chain = prompt | llm
-    
+
     result = chain.invoke({"query": original_query})
     return result.content
 
@@ -224,6 +238,7 @@ class GraphState(MessagesState):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    proposed_answer: str | None = None  # NEW: hold draft answer before finalization
 
 
 # --- Agentic Nodes ---
@@ -265,38 +280,52 @@ def classify_query(state: GraphState) -> dict:
 
 def transform_query(state: GraphState) -> dict:
     """
-    Rewrites the user's query into a more precise, standalone question
-    that is optimized for vector retrieval.
+    Rewrite the latest user query to be fully self-contained.
+    We include a small recent history window (last completed human–AI pair) to resolve pronouns and references
+    with minimal token cost.
     """
-    logger.info("---NODE: TRANSFORM QUERY---")
-    conversation_history = format_messages_for_llm(state["messages"])
+    messages = state.get("messages", [])
+    # Extract the latest user question
+    question = get_last_human_message_content(messages)
 
-    prompt = ChatPromptTemplate.from_template(
-        """You are an expert at rewriting conversational queries into standalone, optimized search queries.
+    # Use the last completed turn (one human + following AI) as light context for coref
+    # Fall back to empty if not available (e.g., first user turn)
+    try:
+        # get_last_completed_turn_messages should return [HumanMessage, AIMessage] for the previous completed turn
+        recent_turn = get_last_completed_turn_messages(messages, k=1)
+        recent_history = format_messages_for_llm(recent_turn)
+    except Exception:
+        recent_history = ""
 
-        Based on the conversation history,
-        rewrite the user's latest query into a clear, concise, and self-contained question 
-        that can be used for a vector search.
-
-        Conversation History:
-        {history}
-
-        Rewritten Query:
-        """
+    # Feature toggle: allow disabling this extra context if needed (defaults to True)
+    use_recent_in_rewrite = bool(
+        getattr(settings, "USE_RECENT_HISTORY_IN_REWRITE", True)
     )
-    llm = get_llm(fast_model=True)
-    chain = prompt | llm
+    history_for_prompt = recent_history if use_recent_in_rewrite else ""
 
-    result = chain.invoke({"history": conversation_history})
-    logger.info(f"Transformed query: {result.content}")
+    # Build the prompt and call LLM
+    prompt = ChatPromptTemplate.from_template(
+        "You will rewrite the latest user question to be fully self-contained and unambiguous.\n"
+        "Use the recent conversation to resolve pronouns and references if provided.\n\n"
+        "Recent conversation (may be empty):\n{chat_history}\n\n"
+        "Original question:\n{original}\n\n"
+        "Rewritten question:"
+    )
+    chain = prompt | get_llm(fast_model=True)
+    result = chain.invoke({"chat_history": history_for_prompt, "original": question})
 
-    return {"transformed_query": result.content}
+    rewritten = (
+        result.content.strip() if hasattr(result, "content") else str(result).strip()
+    )
+    return {"transformed_query": rewritten}
 
 
 def generate_hyde_document(state: GraphState) -> dict:
     """Generates a hypothetical answer to be used for retrieval."""
     logger.info("---NODE: GENERATE HYDE DOCUMENT---")
-    query = state.get("transformed_query") or get_last_message_content(state["messages"])
+    query = state.get("transformed_query") or get_last_message_content(
+        state["messages"]
+    )
     prompt = ChatPromptTemplate.from_template(
         "Generate a concise, hypothetical answer to the following question: {question}"
     )
@@ -309,7 +338,9 @@ def generate_hyde_document(state: GraphState) -> dict:
 def web_search(state: GraphState) -> dict:
     """Performs a web search using the Tavily API."""
     logger.info("---NODE: WEB SEARCH---")
-    query = state.get("transformed_query") or get_last_message_content(state["messages"])
+    query = state.get("transformed_query") or get_last_message_content(
+        state["messages"]
+    )
     tool = TavilySearchResults(max_results=3)
     documents = tool.invoke(query)
     # The tool returns a list of dicts, we need to convert them to Document objects
@@ -355,7 +386,9 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     Re-ranks retrieved documents based on their relevance to the query using a Cross-Encoder.
     """
     logger.info("---NODE: RE-RANK DOCUMENTS---")
-    query = state.get("transformed_query") or get_last_message_content(state["messages"])
+    query = state.get("transformed_query") or get_last_message_content(
+        state["messages"]
+    )
     documents = state["documents"]
 
     cross_encoder = HuggingFaceCrossEncoder(
@@ -434,6 +467,7 @@ def summarize_history(state: GraphState) -> dict:
 def generate_answer(state: GraphState) -> dict:
     """
     Node to generate an answer, now with corrected and simplified history.
+    IMPORTANT: Do not append to messages here. Save only a proposed_answer.
     """
     logger.info("---NODE: GENERATE ANSWER---")
     question = get_last_human_message_content(state["messages"])
@@ -443,7 +477,7 @@ def generate_answer(state: GraphState) -> dict:
     completion_tokens = state.get("completion_tokens", 0)
     total_tokens = state.get("total_tokens", 0)
 
-    prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information.
+    prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information
         
         Conversation Summary:
         {summary}
@@ -489,8 +523,9 @@ def generate_answer(state: GraphState) -> dict:
     completion_tokens += token_usage.get("completion_tokens", 0)
     total_tokens += token_usage.get("total_tokens", 0)
 
+    # Only store the proposed answer here; do not touch messages
     return {
-        "messages": [generation],
+        "proposed_answer": generation.content,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
@@ -500,11 +535,15 @@ def generate_answer(state: GraphState) -> dict:
 def grounding_and_safety_check(state: GraphState) -> dict:
     """
     Performs a grounding check using structured output and revises the answer.
-    Sets a flag based on whether the answer is grounded in the context.
+    Appends a single assistant message ONLY if grounded; otherwise appends nothing
+    (so that correction loops do not create extra messages).
     """
     logger.info("---NODE: GROUNDING & SAFETY CHECK---")
     question = get_last_human_message_content(state["messages"])
-    answer = get_last_ai_message_content(state["messages"])
+    # Prefer the proposed_answer (not yet appended to messages)
+    answer = state.get("proposed_answer") or get_last_ai_message_content(
+        state["messages"]
+    )
     documents = state["documents"]
 
     grounding_prompt = ChatPromptTemplate.from_template(
@@ -551,18 +590,28 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 
     logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
 
-    # Replace the last assistant message instead of appending
-    replace_command = create_replacement_message(response.revised_answer)
-    return {
-        **replace_command,
-        "grounding_success": response.is_grounded,
-    }
+    # Append the final assistant message ONLY when grounded
+    if response.is_grounded:
+        return {
+            "messages": [AIMessage(content=response.revised_answer)],
+            "grounding_success": True,
+            "proposed_answer": None,
+        }
+    else:
+        # Do not append anything; move into correction loop
+        return {
+            "grounding_success": False,
+        }
 
 
 def web_search_safety_check(state: GraphState) -> dict:
-    """A simplified safety check for web search results that adds citations."""
+    """A simplified safety check for web search results that adds citations.
+    Appends a single assistant message with citations."""
     logger.info("---NODE: WEB SEARCH SAFETY CHECK---")
-    answer = get_last_ai_message_content(state["messages"])
+    # Prefer the proposed_answer (not yet appended to messages)
+    answer = state.get("proposed_answer") or get_last_ai_message_content(
+        state["messages"]
+    )
     documents = state["documents"]
 
     cited_answer = f"{answer}\n\n**Sources:**\n"
@@ -570,22 +619,33 @@ def web_search_safety_check(state: GraphState) -> dict:
         source_url = doc.metadata.get("source", "N/A")
         cited_answer += f"[{i + 1}] {source_url}\n"
 
-    # Replace the last assistant message instead of appending
-    return create_replacement_message(cited_answer)
+    # Append a single assistant message (no replacement)
+    return {
+        "messages": [AIMessage(content=cited_answer)],
+        "proposed_answer": None,
+    }
 
 
 def handle_retrieval_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE RETRIEVAL FAILURE---")
-    return create_replacement_message(
-        "I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
-    )
+    return {
+        "messages": [
+            AIMessage(
+                content="I'm sorry, but I couldn't find any information to answer your question, even after trying multiple strategies."
+            )
+        ]
+    }
 
 
 def handle_grounding_failure(state: GraphState) -> dict:
     logger.info("---NODE: HANDLE GROUNDING FAILURE---")
-    return create_replacement_message(
-        "I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
-    )
+    return {
+        "messages": [
+            AIMessage(
+                content="I found some information, but I could not construct a factually grounded answer. Please try rephrasing your question."
+            )
+        ]
+    }
 
 
 def increment_retrieval_retry_counter(state: GraphState) -> dict:
@@ -603,24 +663,24 @@ def increment_grounding_retry_counter(state: GraphState) -> dict:
 def smart_retrieval_and_rerank(state: GraphState) -> dict:
     """
     A more powerful retrieval and re-ranking step for grounding correction.
-    Performs dual fresh retrievals, applies RRF fusion, de-duplication, 
+    Performs dual fresh retrievals, applies RRF fusion, de-duplication,
     cross-encoder re-ranking, and diversity filtering.
     """
     logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
-    
+
     # Build two effective queries
     original_query = get_last_human_message_content(state["messages"])
     transformed_query = state.get("transformed_query")
-    
+
     # If transformed_query is missing, perform inline transformation
     if not transformed_query:
         logger.info("Performing inline query transformation with drift-avoidance guard")
         transformed_query = inline_transform_query(original_query)
         logger.info(f"Inline transformed query: {transformed_query}")
-    
+
     # Perform two fresh retrievals
     logger.info("Performing dual fresh retrievals")
-    
+
     # First retrieval with original query
     retriever1, client1 = create_retriever()
     try:
@@ -628,7 +688,7 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
         logger.info(f"Original query retrieved {len(original_docs)} documents")
     finally:
         client1.close()
-    
+
     # Second retrieval with transformed query
     retriever2, client2 = create_retriever()
     try:
@@ -636,25 +696,27 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
         logger.info(f"Transformed query retrieved {len(transformed_docs)} documents")
     finally:
         client2.close()
-    
+
     # Document-level de-duplication before fusion
     original_docs = deduplicate_documents(original_docs)
     transformed_docs = deduplicate_documents(transformed_docs)
-    
+
     # Apply Reciprocal Rank Fusion (RRF)
     fused_docs = apply_reciprocal_rank_fusion([original_docs, transformed_docs], k=60)
-    
+
     # Document-level de-duplication after fusion
     fused_docs = deduplicate_documents(fused_docs)
-    
+
     # Keep candidate pool for cross-encoder (e.g., top 8)
     candidate_pool = fused_docs[:8]
-    logger.info(f"Selected top {len(candidate_pool)} candidates for cross-encoder re-ranking")
-    
+    logger.info(
+        f"Selected top {len(candidate_pool)} candidates for cross-encoder re-ranking"
+    )
+
     if not candidate_pool:
         logger.warning("No candidates available for cross-encoder re-ranking")
         return {"documents": [], "retrieval_success": False, "is_web_search": False}
-    
+
     # Large cross-encoder re-ranking
     cross_encoder = HuggingFaceCrossEncoder(
         model_name=settings.CROSS_ENCODER_MODEL_LARGE
@@ -666,18 +728,22 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     scored_docs = list(zip(candidate_pool, scores))
     scored_docs.sort(key=lambda x: x[1], reverse=True)
     reranked_docs = [doc for doc, score in scored_docs]
-    
+
     logger.info(f"Cross-encoder re-ranking complete for {len(reranked_docs)} documents")
-    
+
     # Simple diversity filter after cross-encoder (final top_k selection)
-    final_docs = apply_diversity_filter(reranked_docs, top_k=4, similarity_threshold=0.85)
-    
-    logger.info(f"Smart retrieval complete. Final selection: {len(final_docs)} documents")
-    
+    final_docs = apply_diversity_filter(
+        reranked_docs, top_k=4, similarity_threshold=0.85
+    )
+
+    logger.info(
+        f"Smart retrieval complete. Final selection: {len(final_docs)} documents"
+    )
+
     return {
-        "documents": final_docs, 
-        "retrieval_success": bool(final_docs), 
-        "is_web_search": False
+        "documents": final_docs,
+        "retrieval_success": bool(final_docs),
+        "is_web_search": False,
     }
 
 
@@ -695,12 +761,16 @@ def hybrid_context_retrieval(state: GraphState) -> dict:
 
     # Combine documents
     combined_docs = internal_documents + web_documents
-    logger.info(f"Combined {len(internal_documents)} internal docs with {len(web_documents)} web docs")
+    logger.info(
+        f"Combined {len(internal_documents)} internal docs with {len(web_documents)} web docs"
+    )
 
     # Document-level de-duplication after combining
     deduplicated_docs = deduplicate_documents(combined_docs)
 
-    logger.info(f"Hybrid context retrieval complete. Final count: {len(deduplicated_docs)} documents")
+    logger.info(
+        f"Hybrid context retrieval complete. Final count: {len(deduplicated_docs)} documents"
+    )
 
     return {"documents": deduplicated_docs, "is_web_search": True}
 
