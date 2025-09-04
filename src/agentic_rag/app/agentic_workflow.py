@@ -1,14 +1,15 @@
 # src/agentic_rag/app/agentic_workflow.py
 
 import hashlib
-from typing import List, Literal, Dict, Tuple
+import json
+from typing import List, Literal, Dict, Tuple, Any
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import AIMessage  # NEW
+from langchain_tavily import TavilySearch
+from langchain_core.messages import AIMessage
 
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
@@ -26,9 +27,15 @@ from agentic_rag.config import settings
 # --- Pydantic Models for Structured Output ---
 
 
+def _as_int(x: Any, default: int = 0) -> int:
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+
 class QueryClassification(BaseModel):
     """The classification of the user's query."""
-
     classification: Literal["simple", "complex"] = Field(
         ...,
         description="The classification of the user's query, either 'simple' or 'complex'.",
@@ -37,7 +44,6 @@ class QueryClassification(BaseModel):
 
 class GroundingCheck(BaseModel):
     """The result of a grounding and safety check."""
-
     is_grounded: bool = Field(
         ...,
         description="Whether the answer is fully supported by the provided source documents.",
@@ -61,45 +67,131 @@ def format_messages_for_llm(messages: list) -> str:
 
 
 # --- Token Usage Helper Functions ---
-def extract_token_usage_from_response(response) -> Dict[str, int]:
+def extract_token_usage_from_response(response: Any) -> Dict[str, int]:
     """
-    Extracts token usage from an LLM response.
-    Handles both regular responses and structured output responses.
-    Returns a dictionary with prompt_tokens, completion_tokens, and total_tokens.
+    Safely extract token usage from a variety of LangChain response objects.
+    Returns zeros when usage is unavailable (e.g., structured outputs that hide metadata).
     """
-    token_usage = {}
-    
-    # For structured output, the response might be wrapped differently
-    if hasattr(response, 'response_metadata'):
-        token_usage = response.response_metadata.get("token_usage", {})
-    elif hasattr(response, '__pydantic_extra__') and 'response_metadata' in getattr(response, '__pydantic_extra__', {}):
-        # Some structured outputs store metadata in __pydantic_extra__
-        token_usage = response.__pydantic_extra__.get('response_metadata', {}).get("token_usage", {})
-    elif hasattr(response, '_response_metadata'):
-        # Alternative attribute name
-        token_usage = response._response_metadata.get("token_usage", {})
-    
+    # Typical LangChain generations
+    meta = getattr(response, "response_metadata", None)
+    if isinstance(meta, dict):
+        usage = meta.get("token_usage") or meta.get("usage") or {}
+        prompt = _as_int(usage.get("prompt_tokens", 0))
+        completion = _as_int(usage.get("completion_tokens", 0))
+        total = _as_int(usage.get("total_tokens", prompt + completion))
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+        }
+
+    # Some wrappers keep original result under .raw
+    raw = getattr(response, "raw", None)
+    meta = getattr(raw, "response_metadata", None)
+    if isinstance(meta, dict):
+        usage = meta.get("token_usage") or meta.get("usage") or {}
+        prompt = _as_int(usage.get("prompt_tokens", 0))
+        completion = _as_int(usage.get("completion_tokens", 0))
+        total = _as_int(usage.get("total_tokens", prompt + completion))
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+        }
+
+    # Nothing usable; return zeros (no crash)
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def accumulate_token_usage(
+    state: Dict[str, Any], new_usage: Dict[str, int]
+) -> Dict[str, int]:
+    """
+    Returns a new dict with token counters added to the existing state totals.
+    """
     return {
-        "prompt_tokens": token_usage.get("prompt_tokens", 0),
-        "completion_tokens": token_usage.get("completion_tokens", 0),
-        "total_tokens": token_usage.get("total_tokens", 0),
+        "prompt_tokens": _as_int(state.get("prompt_tokens", 0))
+        + _as_int(new_usage.get("prompt_tokens", 0)),
+        "completion_tokens": _as_int(state.get("completion_tokens", 0))
+        + _as_int(new_usage.get("completion_tokens", 0)),
+        "total_tokens": _as_int(state.get("total_tokens", 0))
+        + _as_int(new_usage.get("total_tokens", 0)),
     }
 
 
-def accumulate_token_usage(state: dict, new_tokens: Dict[str, int]) -> Dict[str, int]:
+def _count_human_turns(messages: List[Any]) -> int:
+    """Counts the number of Human messages in the conversation."""
+    return sum(1 for m in messages if _msg_type(m) == "human")
+
+
+def maybe_reset_usage_counters(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Accumulates token usage from state and new tokens.
-    Returns the updated token counts.
+    Resets token counters at the start of a new super-step (new user turn).
+    Detects a new user turn by counting Human messages.
     """
-    current_prompt = state.get("prompt_tokens", 0)
-    current_completion = state.get("completion_tokens", 0)
-    current_total = state.get("total_tokens", 0)
-    
-    return {
-        "prompt_tokens": current_prompt + new_tokens.get("prompt_tokens", 0),
-        "completion_tokens": current_completion + new_tokens.get("completion_tokens", 0),
-        "total_tokens": current_total + new_tokens.get("total_tokens", 0),
-    }
+    messages = state.get("messages", [])
+    current_turn_index = _count_human_turns(messages)
+    last_index = state.get("token_usage_turn_index", None)
+
+    if last_index is None or last_index != current_turn_index:
+        logger.info(
+            f"New super-step detected (human_turns {last_index} -> {current_turn_index}). Resetting token counters."
+        )
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "token_usage_turn_index": current_turn_index,
+        }
+
+    # Keep current index if no reset necessary
+    return {"token_usage_turn_index": current_turn_index}
+
+
+# --- Parser helpers for raw-JSON prompts ---
+def parse_query_classification(text: str) -> QueryClassification:
+    """
+    Parses classification from model output.
+    Accepts JSON or plain text 'simple'/'complex'.
+    """
+    text = (text or "").strip()
+    # Try JSON first
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and "classification" in data:
+            val = str(data["classification"]).strip().lower()
+            if val in ("simple", "complex"):
+                return QueryClassification(classification=val)  # type: ignore
+    except Exception:
+        pass
+
+    # Fallback to plain text
+    tl = text.lower()
+    if "complex" in tl and "simple" not in tl:
+        return QueryClassification(classification="complex")
+    if "simple" in tl and "complex" not in tl:
+        return QueryClassification(classification="simple")
+    # Heuristic default
+    return QueryClassification(classification="simple")
+
+
+def parse_grounding_check(text: str) -> GroundingCheck:
+    """
+    Parses grounding check from model output JSON.
+    Falls back to heuristics if JSON is malformed.
+    """
+    text = (text or "").strip()
+    try:
+        data = json.loads(text)
+        is_grounded = bool(data.get("is_grounded"))
+        revised_answer = str(data.get("revised_answer", ""))
+        return GroundingCheck(is_grounded=is_grounded, revised_answer=revised_answer)
+    except Exception:
+        tl = text.lower()
+        is_grounded = ("true" in tl and "false" not in tl) or (
+            "supported" in tl and "not" not in tl
+        )
+        return GroundingCheck(is_grounded=is_grounded, revised_answer=text)
 
 
 # --- Helper functions for grounding correction improvements ---
@@ -174,9 +266,6 @@ def apply_reciprocal_rank_fusion(
     sorted_docs = sorted(doc_scores.values(), key=lambda x: x[1], reverse=True)
     fused_docs = [doc for doc, score in sorted_docs]
 
-    logger.info(
-        f"RRF fusion applied to {len(doc_lists)} lists, resulting in {len(fused_docs)} unique documents"
-    )
     return fused_docs
 
 
@@ -234,10 +323,10 @@ def apply_diversity_filter(
     return selected
 
 
-def inline_transform_query(original_query: str) -> str:
+def inline_transform_query(original_query: str) -> Tuple[str, Dict[str, int]]:
     """
     Inline transformation of query with drift-avoidance guard.
-    Uses the same pattern as transform_query but with explicit constraints.
+    Returns the rewritten query AND its token usage so callers can accumulate.
     """
     prompt = ChatPromptTemplate.from_template(
         """You are an expert at rewriting conversational queries into standalone, optimized search queries.
@@ -259,7 +348,9 @@ def inline_transform_query(original_query: str) -> str:
     chain = prompt | llm
 
     result = chain.invoke({"query": original_query})
-    return result.content
+    usage = extract_token_usage_from_response(result)
+    rewritten = getattr(result, "content", str(result))
+    return rewritten, usage
 
 
 # --- Updated GraphState with self-correction fields ---
@@ -281,6 +372,7 @@ class GraphState(MessagesState):
     completion_tokens: int = 0
     total_tokens: int = 0
     proposed_answer: str | None = None  # NEW: hold draft answer before finalization
+    token_usage_turn_index: int | None = None  # NEW: for per-turn reset
 
 
 # --- Agentic Nodes ---
@@ -288,10 +380,14 @@ class GraphState(MessagesState):
 
 def classify_query(state: GraphState) -> dict:
     """
-    Classifies the user's query using structured output to determine if it is
-    a simple standalone question or a complex one that requires conversation history.
+    Classifies the user's query using raw generation to reliably capture token usage.
+    Resets counters at the start of a new user turn (super-step).
     """
     logger.info("---NODE: CLASSIFY QUERY---")
+
+    # Reset counters if this is a new user turn
+    reset_patch = maybe_reset_usage_counters(state)
+
     last_message = get_last_message_content(state["messages"])
     conversation_history = format_messages_for_llm(state["messages"][:-1])
 
@@ -300,7 +396,10 @@ def classify_query(state: GraphState) -> dict:
         Your task is to determine if the user's latest query is a simple, standalone question or 
         if it's a complex question that depends on the previous conversation history.
 
-        Respond with "simple" or "complex".
+        Respond ONLY with JSON:
+        {{
+          "classification": "simple" | "complex"
+        }}
 
         Conversation History:
         {history}
@@ -308,22 +407,27 @@ def classify_query(state: GraphState) -> dict:
         User Query: {query}
         """
     )
-    # Use structured output
-    llm = get_llm(fast_model=True).with_structured_output(QueryClassification)
+    # Use raw LLM so we can capture token usage reliably
+    llm = get_llm(fast_model=True)
     chain = prompt | llm
 
     result = chain.invoke({"history": conversation_history, "query": last_message})
 
-    # Extract and accumulate token usage
+    # Extract and accumulate token usage (accumulate against the reset state)
     new_tokens = extract_token_usage_from_response(result)
-    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+    logger.debug(f"classify_query token_usage extracted: {new_tokens}")
+    totals = accumulate_token_usage({**state, **reset_patch}, new_tokens)
 
-    is_complex = result.classification == "complex"
+    # Parse structured result
+    parsed = parse_query_classification(getattr(result, "content", str(result)))
+    is_complex = parsed.classification == "complex"
     logger.info(f"Query classified as: {'complex' if is_complex else 'simple'}")
 
+    # IMPORTANT: apply reset_patch FIRST, then totals so totals are not overwritten by zeros
     return {
+        **reset_patch,
+        **totals,
         "is_complex_query": is_complex,
-        **accumulated_tokens,
     }
 
 
@@ -340,7 +444,6 @@ def transform_query(state: GraphState) -> dict:
     # Use the last completed turn (one human + following AI) as light context for coref
     # Fall back to empty if not available (e.g., first user turn)
     try:
-        # get_last_completed_turn_messages should return [HumanMessage, AIMessage] for the previous completed turn
         recent_turn = get_last_completed_turn_messages(messages, k=1)
         recent_history = format_messages_for_llm(recent_turn)
     except Exception:
@@ -388,11 +491,11 @@ def generate_hyde_document(state: GraphState) -> dict:
     llm = get_llm(fast_model=True)
     chain = prompt | llm
     result = chain.invoke({"question": query})
-    
+
     # Extract and accumulate token usage
     new_tokens = extract_token_usage_from_response(result)
     accumulated_tokens = accumulate_token_usage(state, new_tokens)
-    
+
     return {
         "hyde_document": result.content,
         **accumulated_tokens,
@@ -405,7 +508,7 @@ def web_search(state: GraphState) -> dict:
     query = state.get("transformed_query") or get_last_message_content(
         state["messages"]
     )
-    tool = TavilySearchResults(max_results=3)
+    tool = TavilySearch(max_results=3)
     documents = tool.invoke(query)
     # The tool returns a list of dicts, we need to convert them to Document objects
     doc_objects = [
@@ -431,9 +534,11 @@ def retrieve_documents(state: GraphState) -> dict:
     )
 
     retriever, client = create_retriever()
-    documents = retriever.invoke(query)
+    try:
+        documents = retriever.invoke(query)
+    finally:
+        client.close()
     dedup_documents = deduplicate_documents(documents)
-    client.close()
 
     needs_reranking = bool(documents)
     return {
@@ -511,18 +616,17 @@ def summarize_history(state: GraphState) -> dict:
         summary_response = summarization_chain.invoke(
             {"new_messages": formatted_new_messages}
         )
-        turn_summary = summary_response.content
-        token_usage = summary_response.response_metadata.get("token_usage", {})
+        turn_summary = getattr(summary_response, "content", str(summary_response))
+        usage = extract_token_usage_from_response(summary_response)
 
         # Append the new summary to the existing one
-        new_summary = f"{summary}\n- {turn_summary}"
+        new_summary = f"{summary}\n- {turn_summary}".strip()
 
+        totals = accumulate_token_usage(state, usage)
         return {
-            "summary": new_summary.strip(),
+            "summary": new_summary,
             "turn_count": turn_count,
-            "prompt_tokens": token_usage.get("prompt_tokens", 0),
-            "completion_tokens": token_usage.get("completion_tokens", 0),
-            "total_tokens": token_usage.get("total_tokens", 0),
+            **totals,
         }
 
     return {"turn_count": turn_count}
@@ -537,9 +641,6 @@ def generate_answer(state: GraphState) -> dict:
     question = get_last_human_message_content(state["messages"])
     documents = state["documents"]
     summary = state.get("summary", "")
-    prompt_tokens = state.get("prompt_tokens", 0)
-    completion_tokens = state.get("completion_tokens", 0)
-    total_tokens = state.get("total_tokens", 0)
 
     prompt_template = """Answer the question based only on the following summary, context, and chat history. Don't make up information
         
@@ -581,24 +682,19 @@ def generate_answer(state: GraphState) -> dict:
             "chat_history": formatted_recent_history,
         }
     )
-    token_usage = generation.response_metadata.get("token_usage", {})
-
-    prompt_tokens += token_usage.get("prompt_tokens", 0)
-    completion_tokens += token_usage.get("completion_tokens", 0)
-    total_tokens += token_usage.get("total_tokens", 0)
+    usage = extract_token_usage_from_response(generation)
+    totals = accumulate_token_usage(state, usage)
 
     # Only store the proposed answer here; do not touch messages
     return {
-        "proposed_answer": generation.content,
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
+        "proposed_answer": getattr(generation, "content", str(generation)),
+        **totals,
     }
 
 
 def grounding_and_safety_check(state: GraphState) -> dict:
     """
-    Performs a grounding check using structured output and revises the answer.
+    Performs a grounding check using raw JSON output to ensure we can read response_metadata.
     Appends a single assistant message ONLY if grounded; otherwise appends nothing
     (so that correction loops do not create extra messages).
     """
@@ -628,11 +724,16 @@ def grounding_and_safety_check(state: GraphState) -> dict:
         2. If the answer is fully supported, revise it to include citations in IEEE format (e.g., [1], [2]). List the sources in a 'References' section at the end.
         3. If the answer is not supported or contains hallucinations, set 'is_grounded' to false and provide a revised answer stating that you cannot answer based on the documents.
 
-        Return the result in the requested structured format.
+        Respond ONLY with a single JSON object containing:
+        {{
+          "is_grounded": true | false,
+          "revised_answer": "string"
+        }}
         """
     )
 
-    llm = get_llm(fast_model=False).with_structured_output(GroundingCheck)
+    llm = get_llm(fast_model=False)  # raw, not structured wrapper
+    grounding_chain = grounding_prompt | llm
 
     def format_docs_for_citation(docs: List[Document]) -> str:
         """Formats docs with numbered sources for citation."""
@@ -641,8 +742,6 @@ def grounding_and_safety_check(state: GraphState) -> dict:
             source_id = f"Source [{i + 1}]: {doc.metadata.get('file_name', 'N/A')}"
             formatted.append(f"{source_id}\n{doc.page_content}")
         return "\n\n".join(formatted)
-
-    grounding_chain = grounding_prompt | llm
 
     response = grounding_chain.invoke(
         {
@@ -654,23 +753,24 @@ def grounding_and_safety_check(state: GraphState) -> dict:
 
     # Extract and accumulate token usage
     new_tokens = extract_token_usage_from_response(response)
-    accumulated_tokens = accumulate_token_usage(state, new_tokens)
+    totals = accumulate_token_usage(state, new_tokens)
 
-    logger.info(f"Grounding check complete. Is grounded: {response.is_grounded}")
+    parsed = parse_grounding_check(getattr(response, "content", str(response)))
+    logger.info(f"Grounding check complete. Is grounded: {parsed.is_grounded}")
 
     # Append the final assistant message ONLY when grounded
-    if response.is_grounded:
+    if parsed.is_grounded:
         return {
-            "messages": [AIMessage(content=response.revised_answer)],
+            "messages": [AIMessage(content=parsed.revised_answer)],
             "grounding_success": True,
             "proposed_answer": None,
-            **accumulated_tokens,
+            **totals,
         }
     else:
         # Do not append anything; move into correction loop
         return {
             "grounding_success": False,
-            **accumulated_tokens,
+            **totals,
         }
 
 
@@ -735,6 +835,7 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     A more powerful retrieval and re-ranking step for grounding correction.
     Performs dual fresh retrievals, applies RRF fusion, de-duplication,
     cross-encoder re-ranking, and diversity filtering.
+    Also accounts for token usage from inline_transform_query.
     """
     logger.info("---NODE: SMART RETRIEVAL & RE-RANK (GROUNDING CORRECTION)---")
 
@@ -745,8 +846,19 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     # If transformed_query is missing, perform inline transformation
     if not transformed_query:
         logger.info("Performing inline query transformation with drift-avoidance guard")
-        transformed_query = inline_transform_query(original_query)
+        transformed_query, usage = inline_transform_query(original_query)
+        # Accumulate token usage from the inline transform
+        totals = accumulate_token_usage(state, usage)
+        state.update(
+            totals
+        )  # ensure subsequent additions start from the updated totals
         logger.info(f"Inline transformed query: {transformed_query}")
+    else:
+        totals = {
+            "prompt_tokens": state.get("prompt_tokens", 0),
+            "completion_tokens": state.get("completion_tokens", 0),
+            "total_tokens": state.get("total_tokens", 0),
+        }
 
     # Perform two fresh retrievals
     logger.info("Performing dual fresh retrievals")
@@ -785,7 +897,12 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
 
     if not candidate_pool:
         logger.warning("No candidates available for cross-encoder re-ranking")
-        return {"documents": [], "retrieval_success": False, "is_web_search": False}
+        return {
+            "documents": [],
+            "retrieval_success": False,
+            "is_web_search": False,
+            **totals,
+        }
 
     # Large cross-encoder re-ranking
     cross_encoder = HuggingFaceCrossEncoder(
@@ -814,6 +931,8 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
         "documents": final_docs,
         "retrieval_success": bool(final_docs),
         "is_web_search": False,
+        **totals,
+        "transformed_query": transformed_query,
     }
 
 
