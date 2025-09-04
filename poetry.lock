@@ -1731,6 +1731,24 @@ openai = ">=1.86.0,<2.0.0"
 tiktoken = ">=0.7,<1"
 
 [[package]]
+name = "langchain-tavily"
+version = "0.2.11"
+description = "An integration package connecting Tavily and LangChain"
+optional = false
+python-versions = "<4.0,>=3.9"
+groups = ["main"]
+files = [
+    {file = "langchain_tavily-0.2.11-py3-none-any.whl", hash = "sha256:358317c18fbb26500bca665301450e38945f1f4f6a6f4e06406c7674a76c8d5c"},
+    {file = "langchain_tavily-0.2.11.tar.gz", hash = "sha256:ab4f5d0f7fcb276a3905aef2e38c21a334b6cbfc86b405a3238fdc9c6eae1290"},
+]
+
+[package.dependencies]
+aiohttp = ">=3.11.14,<4.0.0"
+langchain = ">=0.3.20,<0.4.0"
+langchain-core = ">=0.3.15,<0.4.0"
+requests = ">=2.32.3,<3.0.0"
+
+[[package]]
 name = "langchain-text-splitters"
 version = "0.3.9"
 description = "LangChain text splitting utilities"
@@ -4732,23 +4750,6 @@ mpmath = ">=1.1.0,<1.4"
 dev = ["hypothesis (>=6.70.0)", "pytest (>=7.1.0)"]
 
 [[package]]
-name = "tavily-python"
-version = "0.7.11"
-description = "Python wrapper for the Tavily API"
-optional = false
-python-versions = ">=3.6"
-groups = ["main"]
-files = [
-    {file = "tavily_python-0.7.11-py3-none-any.whl", hash = "sha256:50559d8b605b6854fd85b1b785c603851b86eb4d0e9fd29154f81b54b734dd6e"},
-    {file = "tavily_python-0.7.11.tar.gz", hash = "sha256:58c3ab71bb62820ade5498acc17bc372f436e88151389912672add6bf6d31aed"},
-]
-
-[package.dependencies]
-httpx = "*"
-requests = "*"
-tiktoken = ">=0.5.1"
-
-[[package]]
 name = "tenacity"
 version = "9.1.2"
 description = "Retry code until it succeeds"
@@ -5634,4 +5635,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.12.*"
-content-hash = "6d18ac0bef80aeb6cadae0a760e940d54caac40fa373daea3b44700b08d2e4f9"
+content-hash = "89bae9b7bfe306a4d880ddd72a96774f49f3f82eb2f3539844e79b59eeb30504"
