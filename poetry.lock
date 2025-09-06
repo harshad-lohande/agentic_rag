@@ -1656,14 +1656,14 @@ tenacity = ">=8.1.0,<8.4.0 || >8.4.0,<10"
 
 [[package]]
 name = "langchain-core"
-version = "0.3.72"
+version = "0.3.75"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "langchain_core-0.3.72-py3-none-any.whl", hash = "sha256:9fa15d390600eb6b6544397a7aa84be9564939b6adf7a2b091179ea30405b240"},
-    {file = "langchain_core-0.3.72.tar.gz", hash = "sha256:4de3828909b3d7910c313242ab07b241294650f5cb6eac17738dd3638b1cd7de"},
+    {file = "langchain_core-0.3.75-py3-none-any.whl", hash = "sha256:03ca1fadf955ee3c7d5806a841f4b3a37b816acea5e61a7e6ba1298c05eea7f5"},
+    {file = "langchain_core-0.3.75.tar.gz", hash = "sha256:ab0eb95a06ed6043f76162e6086b45037690cb70b7f090bd83b5ebb8a05b70ed"},
 ]
 
 [package.dependencies]
@@ -1674,6 +1674,22 @@ pydantic = ">=2.7.4"
 PyYAML = ">=5.3"
 tenacity = ">=8.1.0,<8.4.0 || >8.4.0,<10.0.0"
 typing-extensions = ">=4.7"
+
+[[package]]
+name = "langchain-experimental"
+version = "0.3.4"
+description = "Building applications with LLMs through composability"
+optional = false
+python-versions = "<4.0,>=3.9"
+groups = ["main"]
+files = [
+    {file = "langchain_experimental-0.3.4-py3-none-any.whl", hash = "sha256:2e587306aea36b60fa5e5fc05dc7281bee9f60a806f0bf9d30916e0ee096af80"},
+    {file = "langchain_experimental-0.3.4.tar.gz", hash = "sha256:937c4259ee4a639c618d19acf0e2c5c2898ef127050346edc5655259aa281a21"},
+]
+
+[package.dependencies]
+langchain-community = ">=0.3.0,<0.4.0"
+langchain-core = ">=0.3.28,<0.4.0"
 
 [[package]]
 name = "langchain-google-genai"
@@ -1712,6 +1728,22 @@ tokenizers = ">=0.19.1"
 
 [package.extras]
 full = ["sentence-transformers (>=2.6.0)", "transformers (>=4.39.0)"]
+
+[[package]]
+name = "langchain-ollama"
+version = "0.3.7"
+description = "An integration package connecting Ollama and LangChain"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "langchain_ollama-0.3.7-py3-none-any.whl", hash = "sha256:845192a75a1671bd36bc8c54baae2e929c3b1b0e3c8c618438df20354b0231de"},
+    {file = "langchain_ollama-0.3.7.tar.gz", hash = "sha256:9deeca09a44fb8c5a46b1e43d670a7301f1d1e73196fa9191a89f9883217903b"},
+]
+
+[package.dependencies]
+langchain-core = ">=0.3.74,<1.0.0"
+ollama = ">=0.5.3,<1.0.0"
 
 [[package]]
 name = "langchain-openai"
@@ -2710,6 +2742,22 @@ files = [
     {file = "nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:6574241a3ec5fdc9334353ab8c479fe75841dbe8f4532a8fc97ce63503330ba1"},
     {file = "nvidia_nvtx_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:2fb11a4af04a5e6c84073e6404d26588a34afd35379f0855a99797897efa75c0"},
 ]
+
+[[package]]
+name = "ollama"
+version = "0.5.3"
+description = "The official Python client for Ollama."
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "ollama-0.5.3-py3-none-any.whl", hash = "sha256:a8303b413d99a9043dbf77ebf11ced672396b59bec27e6d5db67c88f01b279d2"},
+    {file = "ollama-0.5.3.tar.gz", hash = "sha256:40b6dff729df3b24e56d4042fd9d37e231cee8e528677e0d085413a1d6692394"},
+]
+
+[package.dependencies]
+httpx = ">=0.27"
+pydantic = ">=2.9"
 
 [[package]]
 name = "openai"
@@ -5635,4 +5683,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.12.*"
-content-hash = "89bae9b7bfe306a4d880ddd72a96774f49f3f82eb2f3539844e79b59eeb30504"
+content-hash = "9b26101c04ac1b9d266916c42ec924f5b16d7e61a990aa684a248e578d360574"

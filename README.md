@@ -1,8 +1,48 @@
 # **Autonomous Agentic RAG System: A Production-Grade Conversational AI**
 
-This repository contains the source code for a sophisticated, local-first, and autonomous Retrieval-Augmented Generation (RAG) system. The application is designed from the ground up to be a production-ready, containerized solution that can ingest custom documents, maintain multi-turn conversations, and provide factually-grounded, cited answers.
+This repository contains the source code for a sophisticated, local-first, autonomous Retrieval-Augmented Generation (RAG) system. It is production-ready, containerized end-to-end, and supports ingesting your own documents, multi-turn conversations, and factually grounded answers.
 
-This project moves beyond simple RAG chains by implementing a stateful, decision-driven, and self-correcting agentic architecture using LangGraph. The agent can dynamically alter its execution path based on the quality of its internal results, employing a series of advanced RAG techniques to recover from failures and improve the accuracy of its responses.
+This project goes beyond simple RAG chains by implementing a stateful, decision-driven, self-correcting agent using LangGraph. The agent dynamically alters its execution path based on the quality of its internal results and employs advanced RAG techniques to recover from failures and improve answer accuracy.
+
+---
+
+## **What’s New and Improved**
+
+Since the initial version, we’ve added a number of robustness, quality, and deployment improvements:
+
+- Document-level de-duplication across the pipeline
+  - Content-first unique key using a normalized content hash with sensible fallbacks (source + chunk_number, or explicit id). Prevents redundant snippets from inflating context windows and RRF fusion scores.
+
+- Semantic chunking (default) with configurable breakpoints
+  - CHUNKING_STRATEGY="semantic" with percentile/standard_deviation breakpoints to split long documents at natural boundaries, increasing retrieval precision.
+  - Tunable parameters: SEMANTIC_BREAKPOINT_TYPE, SEMANTIC_BREAKPOINT_AMOUNT, SEMANTIC_BUFFER_SIZE, CHUNK_SIZE, CHUNK_OVERLAP.
+
+- Contextual compression in the agentic workflow
+  - An integrated DocumentCompressorPipeline: redundancy filter + LLM extraction + token cap.
+  - Provider-agnostic compression LLM with a single switch: COMPRESSION_LLM_PROVIDER = openai | google | ollama | hf_endpoint.
+  - Tunables: COMPRESSION_MAX_TOKENS, COMPRESSION_OVERLAP_TOKENS, COMPRESSION_REDUNDANCY_SIM.
+
+- Multi-provider support for compression LLMs
+  - Choose between OpenAI, Google Gemini, Ollama (local), or a hosted Hugging Face Inference Endpoint.
+  - Easily switch in config.py or via .env, without changing docker-compose.
+
+- Dockerized Ollama (internal-only by default)
+  - Runs as a service on the Compose network (service name: ollama), not exposed to the LAN.
+  - Backend connects internally via OLLAMA_HOST=http://ollama:11434.
+  - Works on CPU; optional GPU enablement via a small docker-compose.gpu.yml override.
+
+- Robust web search integration (Tavily)
+  - Safer normalization of web search results into LangChain Document objects.
+  - Optional with TAVILY_API_KEY; gracefully degrades to internal results if unavailable.
+
+- Advanced retrieval improvements
+  - Reciprocal Rank Fusion (RRF) to combine multiple retrieval passes (original + transformed queries).
+  - Cross-encoder re-ranking (HuggingFace) with a diversity filter (Jaccard) to keep top-k diverse and relevant context.
+  - Token usage accounting across nodes with automatic per-turn reset.
+
+- New ingestion-worker service
+  - A dedicated one-off task runner for ingestion in docker-compose.
+  - Run on demand with docker compose run --rm ingestion-worker; it exits when done.
 
 ---
 
@@ -17,8 +57,8 @@ This project moves beyond simple RAG chains by implementing a stateful, decision
     * **For Grounding Failures**:
         * **Smart Retrieval & Re-ranking**: Deploys a more powerful cross-encoder model to perform a deeper, more accurate search of the internal knowledge base.
         * **Hybrid Context Synthesis**: Intelligently combines the best internal documents with fresh web search results to create a rich, synthesized context for generating a grounded answer.
-* **Structured Output & Grounding**: The agent uses LLMs with structured output (Pydantic) to ensure reliable decision-making and to perform a final grounding check, programmatically adding citations and verifying the factual accuracy of every claim.
-* **Local-First & Containerized**: The entire application, including the Weaviate vector database, runs locally in a containerized environment using Docker, ensuring data privacy, consistency, and portability.
+* **Structured Output & Grounding**: The agent uses LLMs with structured output (Pydantic) where necessary to ensure reliable decision-making and to perform a final grounding check, and verifying the factual accuracy of every claim.
+* **Local-First & Containerized**: Weaviate (vector database), Redis, Backend (FastAPI), and Ollama can all run locally via Docker Compose, ensuring data privacy, consistency, and portability.
 * **Memory-Efficient Ingestion**: A streaming approach is used to parse and chunk large documents, allowing for the ingestion of very large files without overwhelming the system's memory.
 * **Built-in Evaluation Framework**: The project includes an evaluation suite using the RAGAS framework to quantitatively measure the performance of the RAG pipeline.
 * **Conversational Memory**: The agent remembers the context of previous interactions in a session, allowing for natural, multi-turn follow-up questions.
@@ -35,7 +75,10 @@ The architecture includes:
 1.  **Weaviate Vector Store**: A containerized vector database that stores the embedded document chunks for fast retrieval.
 2.  **FastAPI Backend**: A containerized backend service that hosts the agentic workflow. It exposes a API for the user interface to interact with.
 3.  **Autonomous LangGraph Agent**: The core of the application, defined as a stateful graph with conditional routing. The agent can classify queries, transform them, retrieve and re-rank documents, and enter a self-correction loop if necessary.
-4.  **Streamlit UI**: A simple, web interface that allows users to interact with the backend API in a conversational manner.
+4. **Redis**: Caching/auxiliary store for performance features.
+5. **Ollama** (optional, internal): Local LLM runtime for compression or main LLMs (not exposed externally).
+6. **Ingestion Worker**: One-off service to ingest documents into Weaviate on demand.
+7.  **Streamlit UI**: A simple, web interface that allows users to interact with the backend API in a conversational manner.
 
 ---
 
@@ -53,7 +96,22 @@ The architecture includes:
     * `pydantic-settings`: For managing configuration.
     * `sentence-transformers`: For text embeddings and re-ranking.
     * `langchain-openai`, `langchain-google-genai`: For interacting with LLMs.
-    * `tavily-python`: For the web search tool.
+    * `langchain-tavily`: For the web search tool.
+    * `langchain-ollama`, `langchain-community`, `langchain-huggingface`, etc.
+
+---
+
+## **Services Overview (docker-compose)**
+
+- weaviate: Vector database (published on localhost:8080 by default)
+- redis: Redis cache (published on localhost:6379 by default)
+- ollama: Local LLM service for on-prem models (internal-only; no published ports)
+- backend: FastAPI app (published on localhost:8000)
+- ingestion-worker: One-off job container to ingest data (no published ports; run on demand)
+
+Security defaults:
+- Ollama is not exposed to the host or network by default; only other Compose services can reach it.
+- Keep secrets in .env, not in the compose file or repo.
 
 ---
 
@@ -75,7 +133,7 @@ This automated process ensures that all contributions are held to a high standar
 
 ## **Setup and Installation (Ubuntu/Linux)**
 
-This guide provides detailed instructions to set up the project from scratch.
+This guide provides detailed instructions to set up the project from scratch. You can run locally with Poetry (developer mode) or via Docker Compose (recommended for a consistent, reproducible stack).
 
 ### **1. Prerequisite Installation**
 
@@ -102,7 +160,7 @@ export PATH="/home/your-username/.local/bin:$PATH"
 # Remember to add this line to your ~/.bashrc or ~/.zshrc file
 ```
 
-#### **Install Docker and Docker Compose1**
+#### **Install Docker and Docker Compose**
 
 ```
 # Set up Docker's repository
@@ -125,6 +183,8 @@ sudo usermod -aG docker $USER
 ```
 git clone <your-repository-url>
 cd agentic-rag-system
+cp .env.example .env
+# Edit .env and add your keys: OPENAI_API_KEY or GOOGLE_API_KEY, HUGGINGFACEHUB_API_TOKEN, TAVILY_API_KEY, LANGCHAIN_API_KEY, etc.
 ```
 
 #### **Step 2: Configure Python and Install Dependencies**
@@ -153,14 +213,33 @@ Refer the .env.example
 
 ## **How to Run the Application 🚀**
 
-1.  **Add Your Documents**: Place your `.pdf`, `.docx`, or `.txt` files into the `data/` directory.
+### **Docker-based Quick Start (Recommended)**
 
-2.  **Build and Start the Backend**: This command builds the backend Docker image and starts the FastAPI and Weaviate containers.
+1. Ensure you've cloned and configured the environment
+
+2.  **Add Your Documents**: Place your `.pdf`, `.docx`, or `.txt` files into the `data/` directory.
+
+3.  **Build/Start the stack**: This command starts the services (containers) required to run the application.
+    ```bash
+    docker compose up -d
+    ```
+    or
+
     ```bash
     docker compose up --build -d
     ```
+    If the build is changed.
 
-3.  **Ingest Your Data**: Run this script to process your documents and load them into the vector database.
+4. Pull an Ollama model (if you plan to use Ollama for compression or main LLM)
+
+    ```bash
+    docker compose exec ollama ollama pull llama3.1:8b
+    ```
+
+    Models are cached in the ollama_data volume and persist across restarts.
+
+5.  **Ingest Your Data**: Run this script to process your documents (placed in data/) and load them into the vector database.
+    - **Dev/local mode**:
     ```bash
     poetry run python -m agentic_rag.scripts.run_ingestion
     ```
@@ -169,16 +248,29 @@ Refer the .env.example
     ```bash
     poetry run ingest
     ```
+    - **Docker-based**:
+    ```bash
+    docker compose run --rm ingestion-worker
+    ```
 
 
-4.  **Launch the UI**: Start the Streamlit user interface.
+6.  **Launch the UI**: Start the Streamlit user interface.
     ```bash
     poetry run streamlit run ui/streamlit_app.py
     ```
-    Navigate to **http://localhost:8501** in your browser to start your conversation.
+    Navigate to **http://localhost:8501** in your browser. The UI talks to the backend at http://localhost:8000.
+
+    Ask questions about your ingested documents. The agent will retrieve, re-rank, compress, generate, and provide verifed, grounded answers.
+
+    Optionally, you can also directly send POST requests to `/query` endpoint using curl, postman or other similar methods.
+
+    e.g.
+    ```bash
+    curl -X POST 'http://localhost:8000/query' -H 'Content-Type: application/json' -d '{"query":"User query","session_id":"test-session-1"}'
+    ```
 
 
-5.  **Delete ingested data**: Run this script if you need to delete the indexed data.
+7.  **Delete ingested data**: Run this script when you need to delete the indexed data (in case you change/experiment with embeddings, chunking, retrieval settings).
     ```bash
     poetry run python -m agentic_rag.scripts.delete_indexed_data
     ```
@@ -189,6 +281,127 @@ Refer the .env.example
     ```
 
 ---
+
+## **Optional: GPU Acceleration for Ollama**
+
+If you have an NVIDIA GPU + drivers and NVIDIA Container Toolkit installed, you can enable GPU for the ollama service using an override file.
+
+- Create docker-compose.gpu.yml (see example in repo).
+- Start with GPU:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
+- Verify devices inside the Ollama container:
+
+```bash
+docker compose exec ollama sh -lc 'ls -l /dev/nvidia* || true'
+```
+
+---
+
+## **Switching Compression Providers**
+
+Control contextual compression’s LLM in one place without changing Docker:
+
+- In .env (or in config.py defaults):
+  - COMPRESSION_LLM_PROVIDER=ollama | openai | google | hf_endpoint
+
+Examples:
+- Use Ollama (local):
+  - COMPRESSION_LLM_PROVIDER=ollama
+  - COMPRESSION_LLM_MODEL=llama3.1:8b
+  - Compose sets OLLAMA_HOST=http://ollama:11434 for the backend automatically.
+
+- Use OpenAI:
+  - COMPRESSION_LLM_PROVIDER=openai
+  - Ensure OPENAI_API_KEY in .env.
+
+- Use Google:
+  - COMPRESSION_LLM_PROVIDER=google
+  - Ensure GOOGLE_API_KEY in .env.
+
+- Use a hosted Hugging Face Inference Endpoint:
+  - COMPRESSION_LLM_PROVIDER=hf_endpoint
+  - HF_COMPRESSION_MODEL=mistralai/Mistral-7B-Instruct-v0.3
+  - HUGGINGFACEHUB_API_TOKEN in .env.
+
+Tip: Avoid setting COMPRESSION_LLM_PROVIDER directly in docker-compose.yml unless you explicitly want a deployment-time override. Pydantic BaseSettings reads OS env first; values in compose will override config.py defaults and .env.
+
+---
+
+## **How the Agent Works (Highlights)**
+
+- **Query classification**
+  - Classifies simple vs complex to decide whether to rewrite.
+
+- **Query rewriting and HyDE**
+  - Rewrites conversational queries into standalone queries.
+  - Optionally generates a hypothetical “ideal” answer to guide retrieval.
+
+- **Dual retrieval + RRF fusion**
+  - Retrieves with the original and transformed queries.
+  - Merges lists with Reciprocal Rank Fusion (RRF) and deduplicates.
+
+- **Cross-encoder re-ranking + diversity filter**
+  - Scores candidates with a cross-encoder (Hugging Face).
+  - Applies a Jaccard-based diversity filter to keep a small but varied top-k.
+
+- **Contextual compression**
+  - Reduces context size while preserving salient facts with an LLM extractor.
+  - Limits tokens per snippet and overlaps for coherence.
+  - Pluggable across providers (OpenAI, Google, Ollama, HF Endpoint).
+
+- **Answer generation + grounding check**
+  - Generates a draft using the compressed, re-ranked context.
+  - Verifies claims. If not grounded, enters a correction loop (smart retrieval and/or hybrid context with web results).
+
+- **Web search integration**
+  - TavilySearch with safe result normalization.
+  - Gets the context from the web when internal documents don't provide sufficient context to answer the query
+
+- **Token usage tracking**
+  - Per-node token usage accumulation with per-turn reset to keep metrics meaningful.
+
+- **Document-level de-duplication**
+  - Consistent content-based keys avoid redundant context and bias.
+
+---
+
+## **Testing Connectivity to Ollama**
+
+If you want to quickly confirm backend -> Ollama connectivity without curl, run:
+
+```bash
+docker compose exec backend python
+```
+And then run below script to ensure connectivity:
+
+```bash
+import sys, urllib.request
+try:
+    with urllib.request.urlopen("http://ollama:11434/api/version", timeout=5) as r:
+        print(r.read().decode())
+except Exception as e:
+    print("ERR:", e, file=sys.stderr); sys.exit(1)
+```
+
+And a generation test (requires a pulled model, e.g., llama3.1:8b):
+
+```bash
+import json, sys, urllib.request
+data=json.dumps({"model":"llama3.1:8b","prompt":"Say hello in one sentence."}).encode()
+req=urllib.request.Request("http://ollama:11434/api/generate", data=data, headers={"Content-Type":"application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        print(r.read(2000).decode())
+except Exception as e:
+    print("ERR:", e, file=sys.stderr); sys.exit(1)
+```
+
+---
+
 
 ## **Evaluation**
 
@@ -219,8 +432,17 @@ The evaluation measures the following key metrics:
 
 ---
 
+## **Security Notes**
+
+- Ollama is internal by default (no ports published). Keep it that way unless you explicitly need host access.
+- Store secrets only in .env, never in code or committed files.
+- If you must expose Ollama, bind to loopback only: ports: ["127.0.0.1:11434:11434"] and use a firewall.
+
+---
+
 ## **Future Ideas and Roadmap**
 
-* **Persistent Memory**: Replace the current `InMemorySaver` with a persistent checkpointer (like `PostgresSaver` or `RedisSaver`) so that conversations can be continued across application restarts.
-* **Semantic Chunking**: Implement a more advanced chunking strategy based on semantic meaning rather than fixed sizes.
+* **Semantic Cache**: Embed the incoming user query. Perform a vector search against a dedicated "cache" index in Redis instance.
+* **CI/CD for AI Quality**: Add a step in existing CI workflow that runs the RAGAS evaluation. Compare the metrics from newly generated eval results with the baseline metrics to prevent deploying a regression.
 * **Deployment**: Package and deploy the application to a scalable, production-ready environment like Google Cloud Run or AWS App Runner.
+

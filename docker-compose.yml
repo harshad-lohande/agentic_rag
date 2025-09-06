@@ -1,6 +1,7 @@
 services:
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.32.0
+    restart: unless-stopped
     ports:
       - "8080:8080"
       - "50051:50051"
@@ -13,11 +14,9 @@ services:
       CLUSTER_HOSTNAME: 'node1'
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
       ENABLE_MODULES: 'text2vec-openai,text2vec-cohere,text2vec-huggingface,ref2vec-centroid,generative-openai,qna-openai'
-      # This variable is correct for this version, we will keep it
       PERSISTENCE_LSM_ACCESS_STRATEGY_DISK_USE_READONLY_PERCENTAGE: 90
       TZ: Asia/Kolkata
     healthcheck:
-      # Use a slightly more robust wget command for the healthcheck
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1"]
       interval: 10s
       timeout: 5s
@@ -25,27 +24,51 @@ services:
 
   redis:
     image: redis:8.2.1-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  # Ollama (internal-only). CPU by default; add GPU with docker-compose.gpu.yml.
+  ollama:
+    image: ollama/ollama:0.3.14
+    restart: unless-stopped
+    # No published port; only containers on this network can reach it.
+    # ports:
+    #   - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_NUM_PARALLEL=1
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      # CLI talks to the local server; works without curl
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   backend:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      # These now point to the service names within the Docker network
       - WEAVIATE_HOST=weaviate
       - REDIS_HOST=redis
       - TZ=Asia/Kolkata
+      - OLLAMA_HOST=http://ollama:11434
+      # Avoid overriding COMPRESSION_LLM_PROVIDER here; prefer .env/config.py
     volumes:
       - ./data:/app/data
       - ./src/agentic_rag:/app/agentic_rag
@@ -54,12 +77,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
     command: ["uvicorn", "agentic_rag.app.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
-
-  # A separate service for running the one-off ingestion task
   ingestion-worker:
     build: .
+    restart: "no"
     env_file:
       - .env
     environment:
@@ -71,10 +95,8 @@ services:
     depends_on:
       weaviate:
         condition: service_healthy
-    # This command runs the ingestion script and then the container exits.
-    # In the cloud, this would be a scheduled task.
     command: ["python", "-m", "agentic_rag.scripts.run_ingestion"]
 
-# Define the named volume for Redis persistence
 volumes:
   redis_data:
+  ollama_data:

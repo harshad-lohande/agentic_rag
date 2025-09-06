@@ -9,7 +9,36 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # --- New Redis Setting ---
+    # --- Retrieval -> Rerank -> Compression knobs ---
+    RETRIEVAL_CANDIDATES_K: int = 10  # initial recall before rerank/compress
+    RERANK_TOP_K: int = 3  # keep top-N after rerank
+
+    # --- Contextual compression ---
+    ENABLE_CONTEXTUAL_COMPRESSION: bool = True
+    COMPRESSION_MAX_TOKENS: int = 200
+    COMPRESSION_OVERLAP_TOKENS: int = 30
+    COMPRESSION_REDUNDANCY_SIM: float = 0.95
+
+    # --- Compression LLM (open-source) ---
+    COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
+        "ollama"
+    )
+    HF_COMPRESSION_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    HUGGINGFACEHUB_API_TOKEN: str
+
+    # --- Optional Ollama alternative (if you run an Ollama server) ---
+    OLLAMA_HOST: str = "http://localhost:11434"
+    COMPRESSION_LLM_MODEL: str = "llama3.1:8b"  # for provider="ollama"
+
+    # --- Chunking Settings ---
+    CHUNKING_STRATEGY: Literal["recursive", "semantic"] = "semantic"
+    SEMANTIC_BREAKPOINT_TYPE: Literal["percentile", "standard_deviation"] = "percentile"
+    SEMANTIC_BREAKPOINT_AMOUNT: float = 90.0  # 95.0 for percentile, 1.0 for std dev
+    SEMANTIC_BUFFER_SIZE: int = 20
+    CHUNK_SIZE: int = 500
+    CHUNK_OVERLAP: int = 50
+
+    # --- Redis Setting ---
     REDIS_HOST: str = "localhost"
 
     # --- Provider Settings ---
@@ -18,7 +47,9 @@ class Settings(BaseSettings):
     # --- Ingestion settings from Phase 1 ---
     WEAVIATE_HOST: str = "localhost"
     WEAVIATE_PORT: int = 8080
-    EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"
+    # EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"
+    # EMBEDDING_MODEL: str = "mixedbread-ai/mxbai-embed-large-v1"
+    EMBEDDING_MODEL: str = "intfloat/e5-large-v2"
     INDEX_NAME: str = "AgenticRAG"
     DATA_TO_INDEX: str = "data"
 
