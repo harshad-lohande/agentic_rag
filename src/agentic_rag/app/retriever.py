@@ -38,7 +38,7 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
     # 3. Create and return the retriever
     retriever = vector_store.as_retriever(
         search_kwargs={
-            "k": 5,  # Number of documents to retrieve
+            "k": getattr(settings, "RETRIEVAL_CANDIDATES_K", 20),  # Number of documents to retrieve
             "alpha": 0.5,  # Balance between vector and keyword search (0 = keyword, 1 = vector)
         }
     )
