@@ -1,0 +1,6 @@
+# Exclude documentation assets from build context (not needed at runtime)
+docs/assets/*.png
+docs/assets/*.svg
+docs/assets/raw/
+docs/assets/**/*.drawio
+docs/assets/**/*.mmd
