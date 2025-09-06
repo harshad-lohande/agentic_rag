@@ -17,7 +17,10 @@ from agentic_rag.logging_config import logger
 from agentic_rag.app.hf_chat import HFChatInference
 
 # OPTIONAL: centralize the numeric cap
-COMPRESSION_MAX_NEW_TOKENS = int(getattr(settings, "COMPRESSION_MAX_TOKENS", 200) or 200)
+COMPRESSION_MAX_NEW_TOKENS = int(
+    getattr(settings, "COMPRESSION_MAX_TOKENS", 200) or 200
+)
+
 
 def _resolve_hf_token() -> Optional[str]:
     return (
@@ -62,11 +65,12 @@ def get_compression_llm():
             model=getattr(settings, "COMPRESSION_LLM_MODEL", "qwen2.5:14b"),
             temperature=0.2,
             num_ctx=4096,
-            num_predict=COMPRESSION_MAX_NEW_TOKENS, # Hard limit: max new tokens per compressed snippet
+            num_predict=COMPRESSION_MAX_NEW_TOKENS,  # Hard limit: max new tokens per compressed snippet
         )
 
     else:
         from agentic_rag.app.llm_provider import get_llm
+
         llm = get_llm(fast_model=True)
         try:
             llm.temperature = 0.2
