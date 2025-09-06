@@ -30,6 +30,7 @@ from agentic_rag.app.agentic_workflow import (
     route_after_safety_check,
     smart_retrieval_and_rerank,
     hybrid_context_retrieval,
+    compress_documents,
 )
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 import uuid
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
         workflow.add_node("web_search", web_search)
         workflow.add_node("retrieve_docs", retrieve_documents)
         workflow.add_node("rerank_documents", grade_and_rerank_documents)
+        workflow.add_node("compress_documents", compress_documents)
         workflow.add_node("summarize_history", summarize_history)
         workflow.add_node("generate_answer", generate_answer)
         workflow.add_node("safety_check", grounding_and_safety_check)
@@ -99,14 +101,19 @@ async def lifespan(app: FastAPI):
             },
         )
 
+        # --- When reranking succeeds, go to compression ---
         workflow.add_conditional_edges(
             "rerank_documents",
             route_after_reranking,
             {
-                "summarize": "summarize_history",
+                "compress_documents": "compress_documents",
                 "enter_retrieval_correction": "enter_retrieval_correction",
             },
         )
+
+        # --- After compression in the main path, proceed to summarization then generation ---
+        workflow.add_edge("compress_documents", "summarize_history")
+        workflow.add_edge("summarize_history", "generate_answer")
 
         # --- Retrieval Self-Correction Loop ---
         workflow.add_conditional_edges(
@@ -149,8 +156,9 @@ async def lifespan(app: FastAPI):
                 "handle_grounding_failure": "handle_grounding_failure",
             },
         )
-        workflow.add_edge("smart_retrieval", "generate_answer")
-        workflow.add_edge("hybrid_context", "generate_answer")
+        # --- In grounding correction, pass through compression before generation ---
+        workflow.add_edge("smart_retrieval", "compress_documents")
+        workflow.add_edge("hybrid_context", "compress_documents")
 
         # --- Endpoints ---
         workflow.add_edge("handle_retrieval_failure", END)

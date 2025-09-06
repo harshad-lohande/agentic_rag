@@ -23,6 +23,7 @@ from agentic_rag.app.message_utils import (
 )
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
+from agentic_rag.app.compression import build_document_compressor
 
 # --- Pydantic Models for Structured Output ---
 
@@ -50,7 +51,7 @@ class GroundingCheck(BaseModel):
     )
     revised_answer: str = Field(
         ...,
-        description="The revised, fact-checked, and cited answer. If not grounded, this should be a message indicating failure.",
+        description="The revised, fact-checked answer. If not grounded, this should be a message indicating failure.",
     )
 
 
@@ -199,43 +200,41 @@ def parse_grounding_check(text: str) -> GroundingCheck:
 
 def get_document_dedup_key(doc: Document) -> str:
     """
-    Generate a stable de-duplication key for a document.
-    Uses metadata in order of preference: source, file_name, path, id, or hash of content.
+    Generate a de-duplication key based on CONTENT first (hash of normalized text).
+    Fallback to (source, chunk_number) tuple if content is empty.
     """
-    metadata = doc.metadata or {}
+    content = (doc.page_content or "").strip()
+    if content:
+        # Normalize whitespace so trivial formatting differences don't create distinct hashes
+        normalized = " ".join(content.split())
+        content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+        return f"content:{content_hash}"
 
-    # Try metadata fields in order of preference
-    for key in ["source", "file_name", "path", "id"]:
-        if key in metadata and metadata[key]:
-            return str(metadata[key])
+    # Fallback: (source, chunk_number) if both are present
+    md = doc.metadata or {}
+    src = md.get("source")
+    cn = md.get("chunk_number")
+    if src is not None and cn is not None:
+        return f"{src}#{cn}"
 
-    # Fallback to hash of page_content
-    content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
-    return f"content_hash_{content_hash}"
+    # Last-resort fallback: explicit id if present
+    if md.get("id"):
+        return f"id:{md['id']}"
+
+    # Worst case: stable key from whatever source is available
+    return hashlib.sha256((str(src) + str(cn)).encode("utf-8")).hexdigest()[:16]
 
 
 def deduplicate_documents(documents: List[Document]) -> List[Document]:
-    """
-    Remove duplicate documents based on deduplication key, keeping first occurrence.
-    Returns deduplicated list and logs counts.
-    """
     if not documents:
         return documents
-
-    seen_keys = set()
-    deduplicated = []
-
-    for doc in documents:
-        key = get_document_dedup_key(doc)
-        if key not in seen_keys:
-            seen_keys.add(key)
-            deduplicated.append(doc)
-
-    if len(deduplicated) != len(documents):
-        logger.info(
-            f"Document deduplication: {len(documents)} -> {len(deduplicated)} documents"
-        )
-
+    seen = set()
+    deduplicated: List[Document] = []
+    for d in documents:
+        k = get_document_dedup_key(d)
+        if k not in seen:
+            seen.add(k)
+            deduplicated.append(d)
     return deduplicated
 
 
@@ -377,6 +376,61 @@ class GraphState(MessagesState):
 
 # --- Agentic Nodes ---
 
+def _coerce_tavily_results_to_documents(raw: Any) -> List[Document]:
+    """
+    Normalize TavilySearch outputs into a list[Document], handling:
+    - string
+    - list[str]
+    - list[dict] with keys like content/url or snippet/link
+    - dict with 'results': [...]
+    """
+    if not raw:
+        return []
+
+    # If a single string summary
+    if isinstance(raw, str):
+        return [Document(page_content=raw, metadata={"source": "tavily"})]
+
+    # If a dict, maybe has 'results'
+    items: List[Any]
+    if isinstance(raw, dict):
+        if isinstance(raw.get("results"), list):
+            items = raw["results"]
+        else:
+            items = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+
+    docs: List[Document] = []
+    for item in items:
+        if isinstance(item, str):
+            docs.append(Document(page_content=item, metadata={"source": "tavily"}))
+            continue
+        if isinstance(item, dict):
+            content = (
+                item.get("content")
+                or item.get("snippet")
+                or item.get("text")
+                or item.get("title")
+                or ""
+            )
+            url = item.get("url") or item.get("source") or item.get("link") or ""
+            if not content:
+                # last resort: serialize dict
+                try:
+                    content = json.dumps(item, ensure_ascii=False)
+                except Exception:
+                    content = str(item)
+            docs.append(
+                Document(
+                    page_content=content,
+                    metadata={"source": url or "tavily"},
+                )
+            )
+    return docs
+
 
 def classify_query(state: GraphState) -> dict:
     """
@@ -508,13 +562,14 @@ def web_search(state: GraphState) -> dict:
     query = state.get("transformed_query") or get_last_message_content(
         state["messages"]
     )
-    tool = TavilySearch(max_results=3)
-    documents = tool.invoke(query)
-    # The tool returns a list of dicts, we need to convert them to Document objects
-    doc_objects = [
-        Document(page_content=doc["content"], metadata={"source": doc["url"]})
-        for doc in documents
-    ]
+    try:
+        tool = TavilySearch(max_results=3)
+        raw_results = tool.invoke(query)
+        doc_objects = _coerce_tavily_results_to_documents(raw_results)
+    except Exception as e:
+        logger.error(f"Web search failed: {e}", exc_info=True)
+        doc_objects = []
+
     return {
         "documents": doc_objects,
         "retrieval_success": bool(doc_objects),
@@ -567,7 +622,9 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     scores = cross_encoder.score(pairs)
     scored_docs = list(zip(documents, scores))
     scored_docs.sort(key=lambda x: x[1], reverse=True)
-    reranked_docs = [doc for doc, score in scored_docs[:3]]
+    # Keep a few for compression to work with
+    keep_n = max(1, getattr(settings, "RERANK_TOP_K", 3))
+    reranked_docs = [doc for doc, score in scored_docs[:keep_n]]
 
     retrieval_success = bool(reranked_docs)
     logger.info(
@@ -575,6 +632,29 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     )
 
     return {"documents": reranked_docs, "retrieval_success": retrieval_success}
+
+
+def compress_documents(state: GraphState) -> dict:
+    """
+    Compresses the (re)ranked documents with respect to the query using a
+    DocumentCompressorPipeline (redundancy filter + LLMChainExtractor + token cap).
+    """
+    logger.info("---NODE: CONTEXTUAL COMPRESSION---")
+    query = state.get("transformed_query") or get_last_message_content(
+        state["messages"]
+    )
+    docs = state.get("documents", [])
+
+    if not docs:
+        logger.info("No documents to compress.")
+        return {"documents": [], "retrieval_success": False}
+
+    compressor = build_document_compressor()
+    compressed_docs = compressor.compress_documents(docs, query=query)
+    compressed_docs = deduplicate_documents(compressed_docs)
+
+    logger.info(f"Compressed {len(docs)} docs -> {len(compressed_docs)} snippets")
+    return {"documents": compressed_docs, "retrieval_success": bool(compressed_docs)}
 
 
 def summarize_history(state: GraphState) -> dict:
@@ -694,72 +774,73 @@ def generate_answer(state: GraphState) -> dict:
 
 def grounding_and_safety_check(state: GraphState) -> dict:
     """
-    Performs a grounding check using raw JSON output to ensure we can read response_metadata.
-    Appends a single assistant message ONLY if grounded; otherwise appends nothing
-    (so that correction loops do not create extra messages).
+    Final grounding check without adding citations.
+
+    Behavior:
+    - Validates whether the proposed answer is fully supported by the retrieved documents.
+    - If grounded: appends a single assistant message with the (optionally lightly refined) answer.
+    - If NOT grounded: does NOT append a message; downstream correction loop handles recovery.
+    - No citation generation or source numbering is performed.
     """
-    logger.info("---NODE: GROUNDING & SAFETY CHECK---")
+    logger.info("---NODE: GROUNDING & SAFETY CHECK (NO-CITATIONS)---")
     question = get_last_human_message_content(state["messages"])
-    # Prefer the proposed_answer (not yet appended to messages)
-    answer = state.get("proposed_answer") or get_last_ai_message_content(
-        state["messages"]
-    )
+    answer = state.get("proposed_answer") or get_last_ai_message_content(state["messages"])
     documents = state["documents"]
 
     grounding_prompt = ChatPromptTemplate.from_template(
-        """You are a helpful assistant that acts as a final quality check.
-        Your task is to review a generated answer based on a set of source documents and a question.
+        """You are a final grounding validator.
 
-        Here is the original question:
+        Given:
+        - A user question
+        - A set of source documents (raw text)
+        - A model-generated answer
+
+        Your tasks:
+        1. Determine whether EVERY factual claim in the answer is directly supported by the provided documents.
+        2. If fully supported, return is_grounded=true and (optionally) a lightly edited answer for clarity. DO NOT add citations, reference markers, or fabricate information.
+        3. If any claim is unsupported / hallucinated / contradicted, return is_grounded=false and a revised_answer that politely states you cannot answer confidently based on the provided documents (do NOT attempt to invent missing facts).
+
+        Respond ONLY with a single JSON object:
+        {{
+        "is_grounded": true | false,
+        "revised_answer": "string"
+        }}
+
+        Question:
         {question}
 
-        Here are the source documents, each with a source number:
+        Source Documents (unstructured):
         {context}
 
-        Here is the generated answer that you need to verify:
+        Proposed Answer:
         {answer}
-
-        Please perform the following tasks:
-        1. Verify that every claim in the generated answer is supported by the information in the source documents.
-        2. If the answer is fully supported, revise it to include citations in IEEE format (e.g., [1], [2]). List the sources in a 'References' section at the end.
-        3. If the answer is not supported or contains hallucinations, set 'is_grounded' to false and provide a revised answer stating that you cannot answer based on the documents.
-
-        Respond ONLY with a single JSON object containing:
-        {{
-          "is_grounded": true | false,
-          "revised_answer": "string"
-        }}
         """
-    )
+        )
 
-    llm = get_llm(fast_model=False)  # raw, not structured wrapper
+    llm = get_llm(fast_model=True)  # raw LLM for metadata
     grounding_chain = grounding_prompt | llm
 
-    def format_docs_for_citation(docs: List[Document]) -> str:
-        """Formats docs with numbered sources for citation."""
-        formatted = []
-        for i, doc in enumerate(docs):
-            source_id = f"Source [{i + 1}]: {doc.metadata.get('file_name', 'N/A')}"
-            formatted.append(f"{source_id}\n{doc.page_content}")
-        return "\n\n".join(formatted)
+    # Simple concatenation of documents (no numbering / citation formatting)
+    def format_docs_plain(docs: List[Document]) -> str:
+        return "\n\n".join(d.page_content for d in docs)
 
     response = grounding_chain.invoke(
         {
             "question": question,
-            "context": format_docs_for_citation(documents),
+            "context": format_docs_plain(documents),
             "answer": answer,
         }
     )
 
-    # Extract and accumulate token usage
+    # Token usage extraction & accumulation
     new_tokens = extract_token_usage_from_response(response)
     totals = accumulate_token_usage(state, new_tokens)
 
     parsed = parse_grounding_check(getattr(response, "content", str(response)))
-    logger.info(f"Grounding check complete. Is grounded: {parsed.is_grounded}")
+    logger.info(f"Grounding check complete. is_grounded={parsed.is_grounded}")
 
-    # Append the final assistant message ONLY when grounded
     if parsed.is_grounded:
+        # Append the grounded answer (no citations)
         return {
             "messages": [AIMessage(content=parsed.revised_answer)],
             "grounding_success": True,
@@ -767,7 +848,7 @@ def grounding_and_safety_check(state: GraphState) -> dict:
             **totals,
         }
     else:
-        # Do not append anything; move into correction loop
+        # No message appended; triggers grounding correction path
         return {
             "grounding_success": False,
             **totals,
@@ -986,7 +1067,8 @@ def route_after_retrieval(state: GraphState) -> str:
 def route_after_reranking(state: GraphState) -> str:
     logger.info("---ROUTER: ROUTE AFTER RE-RANKING---")
     if state.get("retrieval_success"):
-        return "summarize"
+        # proceed to contextual compression
+        return "compress_documents"
     else:
         return "enter_retrieval_correction"
 
