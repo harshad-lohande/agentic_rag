@@ -6,7 +6,7 @@ This project goes beyond simple RAG chains by implementing a stateful, decision-
 
 ---
 
-## What’s New and Improved
+## **What’s New and Improved**
 
 Since the initial version, we’ve added a number of robustness, quality, and deployment improvements:
 
@@ -101,7 +101,7 @@ The architecture includes:
 
 ---
 
-## Services Overview (docker-compose)
+## **Services Overview (docker-compose)**
 
 - weaviate: Vector database (published on localhost:8080 by default)
 - redis: Redis cache (published on localhost:6379 by default)
