@@ -37,6 +37,7 @@ def _as_int(x: Any, default: int = 0) -> int:
 
 class QueryClassification(BaseModel):
     """The classification of the user's query."""
+
     classification: Literal["simple", "complex"] = Field(
         ...,
         description="The classification of the user's query, either 'simple' or 'complex'.",
@@ -45,6 +46,7 @@ class QueryClassification(BaseModel):
 
 class GroundingCheck(BaseModel):
     """The result of a grounding and safety check."""
+
     is_grounded: bool = Field(
         ...,
         description="Whether the answer is fully supported by the provided source documents.",
@@ -375,6 +377,7 @@ class GraphState(MessagesState):
 
 
 # --- Agentic Nodes ---
+
 
 def _coerce_tavily_results_to_documents(raw: Any) -> List[Document]:
     """
@@ -784,7 +787,9 @@ def grounding_and_safety_check(state: GraphState) -> dict:
     """
     logger.info("---NODE: GROUNDING & SAFETY CHECK (NO-CITATIONS)---")
     question = get_last_human_message_content(state["messages"])
-    answer = state.get("proposed_answer") or get_last_ai_message_content(state["messages"])
+    answer = state.get("proposed_answer") or get_last_ai_message_content(
+        state["messages"]
+    )
     documents = state["documents"]
 
     grounding_prompt = ChatPromptTemplate.from_template(
@@ -815,7 +820,7 @@ def grounding_and_safety_check(state: GraphState) -> dict:
         Proposed Answer:
         {answer}
         """
-        )
+    )
 
     llm = get_llm(fast_model=True)  # raw LLM for metadata
     grounding_chain = grounding_prompt | llm
