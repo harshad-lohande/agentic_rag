@@ -1,46 +1,54 @@
 # **Autonomous Agentic RAG System: A Production-Grade Conversational AI**
 
-This repository contains the source code for a sophisticated, local-first, autonomous Retrieval-Augmented Generation (RAG) system. It is production-ready, containerized end-to-end, and supports ingesting your own documents, multi-turn conversations, and factually grounded answers.
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](#)
+[![Dockerized](https://img.shields.io/badge/Runtime-Docker-informational.svg)](#)
+[![RAG Pipeline](https://img.shields.io/badge/Type-Agentic_RAG-success.svg)](#)
+[![Status-Active](https://img.shields.io/badge/Status-Active-brightgreen.svg)](#)
 
-This project goes beyond simple RAG chains by implementing a stateful, decision-driven, self-correcting agent using LangGraph. The agent dynamically alters its execution path based on the quality of its internal results and employs advanced RAG techniques to recover from failures and improve answer accuracy.
+This system implements true Agentic RAG: a stateful LangGraph-driven decision workflow that adaptively rewrites queries, performs multi-phase retrieval (with fusion, re-ranking, semantic chunking, and contextual compression), validates grounding before answering, and launches targeted correction loops (retrieval vs grounding) when quality signals degrade.
+
+It persistently checkpoints conversational state in Redis, supports multi-provider/local LLM configurations (OpenAI, Google, Ollama, Hugging Face), and can seamlessly escalate to hybrid internal + web context—all while optimizing token spend through deduplication and compression. The result is a resilient, cost-efficient, and production-grade knowledge assistant rather than a brittle linear RAG chain.
 
 ---
+
+![RAG Taxonomy Diagram](docs/assets/RAG_maturity.png)
+
 
 ## **What’s New and Improved**
 
 Since the initial version, we’ve added a number of robustness, quality, and deployment improvements:
 
-- Document-level de-duplication across the pipeline
+- **Document-level de-duplication across the pipeline**
   - Content-first unique key using a normalized content hash with sensible fallbacks (source + chunk_number, or explicit id). Prevents redundant snippets from inflating context windows and RRF fusion scores.
 
-- Semantic chunking (default) with configurable breakpoints
+- **Semantic chunking (default) with configurable breakpoints**
   - CHUNKING_STRATEGY="semantic" with percentile/standard_deviation breakpoints to split long documents at natural boundaries, increasing retrieval precision.
   - Tunable parameters: SEMANTIC_BREAKPOINT_TYPE, SEMANTIC_BREAKPOINT_AMOUNT, SEMANTIC_BUFFER_SIZE, CHUNK_SIZE, CHUNK_OVERLAP.
 
-- Contextual compression in the agentic workflow
+- **Contextual compression in the agentic workflow**
   - An integrated DocumentCompressorPipeline: redundancy filter + LLM extraction + token cap.
   - Provider-agnostic compression LLM with a single switch: COMPRESSION_LLM_PROVIDER = openai | google | ollama | hf_endpoint.
   - Tunables: COMPRESSION_MAX_TOKENS, COMPRESSION_OVERLAP_TOKENS, COMPRESSION_REDUNDANCY_SIM.
 
-- Multi-provider support for compression LLMs
+- **Multi-provider support for compression LLMs**
   - Choose between OpenAI, Google Gemini, Ollama (local), or a hosted Hugging Face Inference Endpoint.
   - Easily switch in config.py or via .env, without changing docker-compose.
 
-- Dockerized Ollama (internal-only by default)
+- **Dockerized Ollama (internal-only by default)**
   - Runs as a service on the Compose network (service name: ollama), not exposed to the LAN.
   - Backend connects internally via OLLAMA_HOST=http://ollama:11434.
   - Works on CPU; optional GPU enablement via a small docker-compose.gpu.yml override.
 
-- Robust web search integration (Tavily)
+- **Robust web search integration (Tavily)**
   - Safer normalization of web search results into LangChain Document objects.
-  - Optional with TAVILY_API_KEY; gracefully degrades to internal results if unavailable.
 
-- Advanced retrieval improvements
+- **Advanced retrieval improvements**
   - Reciprocal Rank Fusion (RRF) to combine multiple retrieval passes (original + transformed queries).
   - Cross-encoder re-ranking (HuggingFace) with a diversity filter (Jaccard) to keep top-k diverse and relevant context.
   - Token usage accounting across nodes with automatic per-turn reset.
 
-- New ingestion-worker service
+- **New ingestion-worker service**
   - A dedicated one-off task runner for ingestion in docker-compose.
   - Run on demand with docker compose run --rm ingestion-worker; it exits when done.
 
@@ -66,7 +74,47 @@ Since the initial version, we’ve added a number of robustness, quality, and de
 
 ---
 
+## **How the Agent Works (Highlights)**
+
+- **Query classification**
+  - Classifies simple vs complex to decide whether to rewrite.
+
+- **Query rewriting and HyDE**
+  - Rewrites conversational queries into standalone queries.
+  - Optionally generates a hypothetical “ideal” answer to guide retrieval.
+
+- **Dual retrieval + RRF fusion**
+  - Retrieves with the original and transformed queries.
+  - Merges lists with Reciprocal Rank Fusion (RRF) and deduplicates.
+
+- **Cross-encoder re-ranking + diversity filter**
+  - Scores candidates with a cross-encoder (Hugging Face).
+  - Applies a Jaccard-based diversity filter to keep a small but varied top-k.
+
+- **Contextual compression**
+  - Reduces context size while preserving salient facts with an LLM extractor.
+  - Limits tokens per snippet and overlaps for coherence.
+  - Pluggable across providers (OpenAI, Google, Ollama, HF Endpoint).
+
+- **Answer generation + grounding check**
+  - Generates a draft using the compressed, re-ranked context.
+  - Verifies claims. If not grounded, enters a correction loop (smart retrieval and/or hybrid context with web results).
+
+- **Web search integration**
+  - TavilySearch with safe result normalization.
+  - Gets the context from the web when internal documents don't provide sufficient context to answer the query
+
+- **Token usage tracking**
+  - Per-node token usage accumulation with per-turn reset to keep metrics meaningful.
+
+- **Document-level de-duplication**
+  - Consistent content-based keys avoid redundant context and bias.
+
+---
+
 ## **System Architecture**
+
+![Agentic RAG Flowchart](docs/assets/AgenticRAG_flowchart.png)
 
 The application is built around a decision-driven agent orchestrated by LangGraph. Unlike a simple, linear workflow, this agent can dynamically route its execution based on the state of the conversation and the quality of its retrieved information.
 
@@ -258,6 +306,7 @@ Refer the .env.example
     ```bash
     poetry run streamlit run ui/streamlit_app.py
     ```
+    
     Navigate to **http://localhost:8501** in your browser. The UI talks to the backend at http://localhost:8000.
 
     Ask questions about your ingested documents. The agent will retrieve, re-rank, compress, generate, and provide verifed, grounded answers.
@@ -328,44 +377,6 @@ Examples:
   - HUGGINGFACEHUB_API_TOKEN in .env.
 
 Tip: Avoid setting COMPRESSION_LLM_PROVIDER directly in docker-compose.yml unless you explicitly want a deployment-time override. Pydantic BaseSettings reads OS env first; values in compose will override config.py defaults and .env.
-
----
-
-## **How the Agent Works (Highlights)**
-
-- **Query classification**
-  - Classifies simple vs complex to decide whether to rewrite.
-
-- **Query rewriting and HyDE**
-  - Rewrites conversational queries into standalone queries.
-  - Optionally generates a hypothetical “ideal” answer to guide retrieval.
-
-- **Dual retrieval + RRF fusion**
-  - Retrieves with the original and transformed queries.
-  - Merges lists with Reciprocal Rank Fusion (RRF) and deduplicates.
-
-- **Cross-encoder re-ranking + diversity filter**
-  - Scores candidates with a cross-encoder (Hugging Face).
-  - Applies a Jaccard-based diversity filter to keep a small but varied top-k.
-
-- **Contextual compression**
-  - Reduces context size while preserving salient facts with an LLM extractor.
-  - Limits tokens per snippet and overlaps for coherence.
-  - Pluggable across providers (OpenAI, Google, Ollama, HF Endpoint).
-
-- **Answer generation + grounding check**
-  - Generates a draft using the compressed, re-ranked context.
-  - Verifies claims. If not grounded, enters a correction loop (smart retrieval and/or hybrid context with web results).
-
-- **Web search integration**
-  - TavilySearch with safe result normalization.
-  - Gets the context from the web when internal documents don't provide sufficient context to answer the query
-
-- **Token usage tracking**
-  - Per-node token usage accumulation with per-turn reset to keep metrics meaningful.
-
-- **Document-level de-duplication**
-  - Consistent content-based keys avoid redundant context and bias.
 
 ---
 
@@ -445,4 +456,20 @@ The evaluation measures the following key metrics:
 * **Semantic Cache**: Embed the incoming user query. Perform a vector search against a dedicated "cache" index in Redis instance.
 * **CI/CD for AI Quality**: Add a step in existing CI workflow that runs the RAGAS evaluation. Compare the metrics from newly generated eval results with the baseline metrics to prevent deploying a regression.
 * **Deployment**: Package and deploy the application to a scalable, production-ready environment like Google Cloud Run or AWS App Runner.
+
+---
+
+## **License**
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](./LICENSE) file for details.  
+
+---
+
+## **Disclaimer**
+
+This software may generate or relay AI model outputs that can be inaccurate, incomplete, or contextually inappropriate. You are responsible for validating critical information, ensuring regulatory / data protection compliance, and applying proper human oversight in production deployments. No warranty is provided—use at your own risk. See [DISCLAIMER](./DISCLAIMER.md) if present for additional details.
+
+---
+
+Happy building! If you run into issues, please open an issue with logs and reproduction steps.
 
