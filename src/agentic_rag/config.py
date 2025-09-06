@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     )
 
     # --- Retrieval -> Rerank -> Compression knobs ---
-    RETRIEVAL_CANDIDATES_K: int = 10        # initial recall before rerank/compress
-    RERANK_TOP_K: int = 3                 # keep top-N after rerank
+    RETRIEVAL_CANDIDATES_K: int = 10  # initial recall before rerank/compress
+    RERANK_TOP_K: int = 3  # keep top-N after rerank
 
     # --- Contextual compression ---
     ENABLE_CONTEXTUAL_COMPRESSION: bool = True
@@ -20,14 +20,16 @@ class Settings(BaseSettings):
     COMPRESSION_REDUNDANCY_SIM: float = 0.95
 
     # --- Compression LLM (open-source) ---
-    COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = "ollama"
+    COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
+        "ollama"
+    )
     HF_COMPRESSION_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
     HUGGINGFACEHUB_API_TOKEN: str
 
     # --- Optional Ollama alternative (if you run an Ollama server) ---
     OLLAMA_HOST: str = "http://localhost:11434"
     COMPRESSION_LLM_MODEL: str = "llama3.1:8b"  # for provider="ollama"
-    
+
     # --- Chunking Settings ---
     CHUNKING_STRATEGY: Literal["recursive", "semantic"] = "semantic"
     SEMANTIC_BREAKPOINT_TYPE: Literal["percentile", "standard_deviation"] = "percentile"
@@ -35,7 +37,7 @@ class Settings(BaseSettings):
     SEMANTIC_BUFFER_SIZE: int = 20
     CHUNK_SIZE: int = 500
     CHUNK_OVERLAP: int = 50
-    
+
     # --- Redis Setting ---
     REDIS_HOST: str = "localhost"
 
