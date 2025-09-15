@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds (1 hour)
     SEMANTIC_CACHE_MAX_SIZE: int = 1000  # Maximum number of cached queries
     SEMANTIC_CACHE_INDEX_NAME: str = "SemanticCache"
+    SEMANTIC_CACHE_GC_INTERVAL: int = 3600  # Garbage collection interval in seconds (1 hour)
+    SEMANTIC_CACHE_DEDUP_SIMILARITY_THRESHOLD: float = 0.98  # Threshold for deduplication
 
 
 settings = Settings()
