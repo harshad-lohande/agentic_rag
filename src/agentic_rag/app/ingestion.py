@@ -5,10 +5,10 @@ import weaviate
 
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_weaviate.vectorstores import WeaviateVectorStore
 
 from agentic_rag.app.document_parser import DocumentParser
 from agentic_rag.app.chunking_strategy import chunk_text
+from agentic_rag.app.weaviate_config import create_weaviate_vector_store, create_semantic_cache_collection
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 
@@ -56,12 +56,18 @@ def ingest_documents():
         client = weaviate.connect_to_local(host=WEAVIATE_HOST, port=WEAVIATE_PORT)
         logger.info("Successfully connected to Weaviate.")
 
-        # Instantiate the Vector Store object
-        vector_store = WeaviateVectorStore(
+        # Create semantic cache collection if enabled
+        if settings.ENABLE_SEMANTIC_CACHE:
+            logger.info("Setting up semantic cache collection...")
+            create_semantic_cache_collection(client)
+
+        # Instantiate the Vector Store object with HNSW optimization
+        vector_store = create_weaviate_vector_store(
             client=client,
             index_name=INDEX_NAME,
+            embedding_model=embedding_model,
             text_key="text",
-            embedding=embedding_model,
+            enable_hnsw_optimization=True
         )
 
         total_chunks_indexed = 0

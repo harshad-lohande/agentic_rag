@@ -75,5 +75,25 @@ class Settings(BaseSettings):
     CROSS_ENCODER_MODEL_LARGE: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
     CROSS_ENCODER_MODEL_ROBERTA: str = "cross-encoder/stsb-roberta-large"
 
+    # --- HNSW Index Configuration ---
+    # efConstruction: Higher values create more accurate index (build-time)
+    # Recommended range: 64-512, higher for better accuracy/slower builds
+    HNSW_EF_CONSTRUCTION: int = 256
+    
+    # ef: Query-time search parameter (runtime)
+    # Recommended range: 16-256, higher for better accuracy/slower queries
+    HNSW_EF: int = 64
+    
+    # maxConnections: Max connections per node in HNSW graph
+    # Recommended range: 16-64, higher for better recall/more memory
+    HNSW_MAX_CONNECTIONS: int = 32
+
+    # --- Semantic Caching Configuration ---
+    ENABLE_SEMANTIC_CACHE: bool = True
+    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95
+    SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds (1 hour)
+    SEMANTIC_CACHE_MAX_SIZE: int = 1000  # Maximum number of cached queries
+    SEMANTIC_CACHE_INDEX_NAME: str = "SemanticCache"
+
 
 settings = Settings()

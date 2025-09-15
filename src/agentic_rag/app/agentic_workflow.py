@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage
 
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
+from agentic_rag.app.semantic_cache import semantic_cache
 from agentic_rag.app.message_utils import (
     _msg_type,
     get_message_content,
@@ -374,6 +375,9 @@ class GraphState(MessagesState):
     total_tokens: int = 0
     proposed_answer: str | None = None  # NEW: hold draft answer before finalization
     token_usage_turn_index: int | None = None  # NEW: for per-turn reset
+    cache_hit: bool = False  # NEW: whether answer came from cache
+    cache_query: str | None = None  # NEW: original query for caching
+    cache_enabled: bool = settings.ENABLE_SEMANTIC_CACHE  # NEW: cache enablement flag
 
 
 # --- Agentic Nodes ---
@@ -433,6 +437,90 @@ def _coerce_tavily_results_to_documents(raw: Any) -> List[Document]:
                 )
             )
     return docs
+
+
+async def check_semantic_cache(state: GraphState) -> dict:
+    """
+    Check if there's a cached answer for the user's query.
+    If found, return it directly and mark as cache hit.
+    """
+    query = get_last_human_message_content(state["messages"])
+    
+    if not query or not state.get("cache_enabled", True):
+        logger.debug("Semantic cache disabled or no query found")
+        return {"cache_hit": False, "cache_query": query}
+    
+    try:
+        cached_result = await semantic_cache.get_cached_answer(query)
+        
+        if cached_result:
+            # Cache hit - return cached answer
+            cached_answer = cached_result["answer"]
+            cached_metadata = cached_result.get("metadata", {})
+            
+            # Add cached answer as AI message
+            ai_message = AIMessage(content=cached_answer)
+            
+            logger.info(f"✅ Cache hit for query: {query[:50]}...")
+            
+            return {
+                "messages": [ai_message],
+                "cache_hit": True,
+                "cache_query": query,
+                "prompt_tokens": cached_metadata.get("prompt_tokens", 0),
+                "completion_tokens": cached_metadata.get("completion_tokens", 0),
+                "total_tokens": cached_metadata.get("total_tokens", 0),
+                "retrieval_success": True,  # Mark as successful to avoid retrieval
+                "grounding_success": True,  # Mark as grounded to avoid safety checks
+            }
+        else:
+            # Cache miss - continue with normal flow
+            logger.debug(f"Cache miss for query: {query[:50]}...")
+            return {"cache_hit": False, "cache_query": query}
+            
+    except Exception as e:
+        logger.error(f"Error checking semantic cache: {e}")
+        return {"cache_hit": False, "cache_query": query}
+
+
+async def store_in_semantic_cache(state: GraphState) -> dict:
+    """
+    Store the generated answer in semantic cache for future use.
+    """
+    if not state.get("cache_enabled", True) or state.get("cache_hit", False):
+        # Don't cache if caching is disabled or this was already a cache hit
+        return {}
+    
+    query = state.get("cache_query") or get_last_human_message_content(state["messages"])
+    answer = get_last_ai_message_content(state["messages"])
+    
+    if not query or not answer:
+        logger.debug("No query or answer to cache")
+        return {}
+    
+    try:
+        # Prepare metadata for caching
+        cache_metadata = {
+            "prompt_tokens": state.get("prompt_tokens", 0),
+            "completion_tokens": state.get("completion_tokens", 0),
+            "total_tokens": state.get("total_tokens", 0),
+            "retrieval_retries": state.get("retrieval_retries", 0),
+            "grounding_retries": state.get("grounding_retries", 0),
+            "is_web_search": state.get("is_web_search", False),
+            "documents_used": len(state.get("documents", [])),
+        }
+        
+        success = await semantic_cache.store_answer(query, answer, cache_metadata)
+        
+        if success:
+            logger.info(f"✅ Cached answer for query: {query[:50]}...")
+        else:
+            logger.warning(f"Failed to cache answer for query: {query[:50]}...")
+            
+    except Exception as e:
+        logger.error(f"Error storing answer in cache: {e}")
+    
+    return {}
 
 
 def classify_query(state: GraphState) -> dict:
@@ -1094,7 +1182,7 @@ def route_after_generation(state: GraphState) -> str:
 def route_after_safety_check(state: GraphState) -> str:
     logger.info("---ROUTER: ROUTE AFTER SAFETY CHECK---")
     if state.get("grounding_success"):
-        return "END"
+        return "store_cache"  # Cache successful answers
     else:
         return "enter_grounding_correction"
 
@@ -1136,3 +1224,34 @@ def route_grounding_correction(state: GraphState) -> str:
     else:
         logger.warning("Max grounding retries exceeded. Routing to failure handler.")
         return "handle_grounding_failure"
+
+
+def route_after_cache_check(state: GraphState) -> str:
+    """
+    Routes based on semantic cache check results.
+    """
+    logger.info("---ROUTER: ROUTE AFTER CACHE CHECK---")
+    
+    if state.get("cache_hit", False):
+        logger.info("Cache hit - routing to cache storage and end")
+        return "store_cache"
+    else:
+        logger.info("Cache miss - routing to query classification")
+        return "classify_query"
+
+
+def route_after_generation_with_cache(state: GraphState) -> str:
+    """
+    Enhanced routing after answer generation that includes cache storage.
+    """
+    logger.info("---ROUTER: ROUTE AFTER GENERATION WITH CACHE---")
+    
+    # First check if this needs safety/grounding check
+    is_web_search = state.get("is_web_search", False)
+    
+    if is_web_search:
+        logger.info("Web search answer - routing to web search safety check then cache")
+        return "web_search_safety_check"
+    else:
+        logger.info("Internal answer - routing to safety check then cache")
+        return "safety_check"

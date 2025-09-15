@@ -7,6 +7,8 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
 from agentic_rag.app.agentic_workflow import (
     GraphState,
+    check_semantic_cache,
+    store_in_semantic_cache,
     classify_query,
     transform_query,
     generate_hyde_document,
@@ -17,6 +19,8 @@ from agentic_rag.app.agentic_workflow import (
     route_for_retrieval,
     route_after_retrieval,
     route_after_reranking,
+    route_after_cache_check,
+    route_after_generation_with_cache,
     increment_retrieval_retry_counter,
     increment_grounding_retry_counter,
     route_retrieval_correction,
@@ -26,7 +30,6 @@ from agentic_rag.app.agentic_workflow import (
     generate_answer,
     summarize_history,
     grounding_and_safety_check,
-    route_after_generation,
     route_after_safety_check,
     smart_retrieval_and_rerank,
     hybrid_context_retrieval,
@@ -37,6 +40,7 @@ import uuid
 from agentic_rag.logging_config import setup_logging, logger
 from agentic_rag.config import settings
 from agentic_rag.app.middlewares import RequestIDMiddleware
+from agentic_rag.app.semantic_cache import semantic_cache
 
 # --- Setup Logging ---
 setup_logging()
@@ -55,6 +59,8 @@ async def lifespan(app: FastAPI):
         workflow = StateGraph(GraphState)
 
         # --- Add all ACTION nodes to the graph ---
+        workflow.add_node("check_cache", check_semantic_cache)
+        workflow.add_node("store_cache", store_in_semantic_cache)
         workflow.add_node("classify_query", classify_query)
         workflow.add_node("transform_query", transform_query)
         workflow.add_node("generate_hyde_document", generate_hyde_document)
@@ -82,7 +88,14 @@ async def lifespan(app: FastAPI):
         workflow.add_node("handle_grounding_failure", handle_grounding_failure)
 
         # --- Set up the graph's edges and conditional routing ---
-        workflow.set_entry_point("classify_query")
+        workflow.set_entry_point("check_cache")
+
+        # Cache routing
+        workflow.add_conditional_edges(
+            "check_cache",
+            route_after_cache_check,
+            {"store_cache": "store_cache", "classify_query": "classify_query"},
+        )
 
         workflow.add_conditional_edges(
             "classify_query",
@@ -134,7 +147,7 @@ async def lifespan(app: FastAPI):
 
         workflow.add_conditional_edges(
             "generate_answer",
-            route_after_generation,
+            route_after_generation_with_cache,
             {
                 "safety_check": "safety_check",
                 "web_search_safety_check": "web_search_safety_check",
@@ -145,7 +158,7 @@ async def lifespan(app: FastAPI):
         workflow.add_conditional_edges(
             "safety_check",
             route_after_safety_check,
-            {"END": END, "enter_grounding_correction": "enter_grounding_correction"},
+            {"store_cache": "store_cache", "enter_grounding_correction": "enter_grounding_correction"},
         )
         workflow.add_conditional_edges(
             "enter_grounding_correction",
@@ -161,9 +174,10 @@ async def lifespan(app: FastAPI):
         workflow.add_edge("hybrid_context", "compress_documents")
 
         # --- Endpoints ---
+        workflow.add_edge("store_cache", END)
         workflow.add_edge("handle_retrieval_failure", END)
         workflow.add_edge("handle_grounding_failure", END)
-        workflow.add_edge("web_search_safety_check", END)
+        workflow.add_edge("web_search_safety_check", "store_cache")
 
         app.state.langgraph_app = workflow.compile(checkpointer=checkpointer)
         logger.info("--- LangGraph app compiled successfully ---")
@@ -232,3 +246,28 @@ async def query_endpoint(request: QueryRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/cache/stats")
+def get_cache_stats():
+    """Get semantic cache statistics."""
+    return semantic_cache.get_cache_stats()
+
+
+@app.post("/cache/clear")
+def clear_cache():
+    """Clear all cache entries."""
+    success = semantic_cache.clear_cache()
+    return {"success": success, "message": "Cache cleared" if success else "Failed to clear cache"}
+
+
+@app.get("/config/hnsw")
+def get_hnsw_config():
+    """Get current HNSW configuration."""
+    return {
+        "hnsw_ef_construction": settings.HNSW_EF_CONSTRUCTION,
+        "hnsw_ef": settings.HNSW_EF,
+        "hnsw_max_connections": settings.HNSW_MAX_CONNECTIONS,
+        "index_name": settings.INDEX_NAME,
+        "embedding_model": settings.EMBEDDING_MODEL,
+    }

@@ -1,11 +1,11 @@
 # src/agentic_rag/app/retriever.py
 
 import weaviate
-from langchain_weaviate.vectorstores import WeaviateVectorStore
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
 from typing import Tuple
 
+from agentic_rag.app.weaviate_config import create_weaviate_vector_store
 from agentic_rag.config import settings
 # from agentic_rag.logging_config import logger
 
@@ -27,12 +27,13 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
     # Instantiate the embedding model that was used for ingestion
     embedding_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
 
-    # 2. Instantiate the Vector Store object
-    vector_store = WeaviateVectorStore(
+    # 2. Instantiate the Vector Store object with HNSW optimization
+    vector_store = create_weaviate_vector_store(
         client=client,
         index_name=settings.INDEX_NAME,
+        embedding_model=embedding_model,
         text_key="text",
-        embedding=embedding_model,
+        enable_hnsw_optimization=False  # Don't recreate during retrieval
     )
 
     # 3. Create and return the retriever
