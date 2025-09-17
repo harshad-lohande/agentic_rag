@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     COMPRESSION_MAX_TOKENS: int = 200
     COMPRESSION_OVERLAP_TOKENS: int = 30
     COMPRESSION_REDUNDANCY_SIM: float = 0.95
+    
+    # --- Performance optimization settings ---
+    ENABLE_FAST_COMPRESSION: bool = True  # Use fast extractive compression instead of LLM-based
+    ENABLE_MODEL_PRELOADING: bool = True  # Pre-load models at startup
+    ENABLE_OPTIMIZED_WORKFLOW: bool = True  # Use streamlined workflow without correction loops
 
     # --- Compression LLM (open-source) ---
     COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (

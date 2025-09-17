@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage
 from agentic_rag.app.retriever import create_retriever
 from agentic_rag.app.llm_provider import get_llm
 from agentic_rag.app.semantic_cache import semantic_cache
+from agentic_rag.app.model_registry import model_registry
 from agentic_rag.app.message_utils import (
     _msg_type,
     get_message_content,
@@ -706,9 +707,17 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     )
     documents = state["documents"]
 
-    cross_encoder = HuggingFaceCrossEncoder(
-        model_name=settings.CROSS_ENCODER_MODEL_SMALL
-    )
+    # Use pre-loaded cross-encoder model from registry for performance optimization
+    cross_encoder = model_registry.get_cross_encoder_small()
+    if cross_encoder is None:
+        # Fallback to on-demand loading if registry not initialized
+        logger.warning("⚠️ Model registry not initialized for reranking, loading cross-encoder on-demand")
+        cross_encoder = HuggingFaceCrossEncoder(
+            model_name=settings.CROSS_ENCODER_MODEL_SMALL
+        )
+    else:
+        logger.debug("✅ Using pre-loaded small cross-encoder from registry")
+        
     pairs = [[query, doc.page_content] for doc in documents]
     scores = cross_encoder.score(pairs)
     scored_docs = list(zip(documents, scores))
@@ -1079,9 +1088,16 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
         }
 
     # Large cross-encoder re-ranking
-    cross_encoder = HuggingFaceCrossEncoder(
-        model_name=settings.CROSS_ENCODER_MODEL_LARGE
-    )
+    cross_encoder = model_registry.get_cross_encoder_large()
+    if cross_encoder is None:
+        # Fallback to on-demand loading if registry not initialized
+        logger.warning("⚠️ Model registry not initialized for smart retrieval, loading large cross-encoder on-demand")
+        cross_encoder = HuggingFaceCrossEncoder(
+            model_name=settings.CROSS_ENCODER_MODEL_LARGE
+        )
+    else:
+        logger.debug("✅ Using pre-loaded large cross-encoder from registry")
+        
     # Use the transformed query for scoring (or original if transformation failed)
     scoring_query = transformed_query or original_query
     pairs = [[scoring_query, doc.page_content] for doc in candidate_pool]

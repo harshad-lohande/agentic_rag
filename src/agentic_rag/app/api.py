@@ -41,6 +41,8 @@ from agentic_rag.logging_config import setup_logging, logger
 from agentic_rag.config import settings
 from agentic_rag.app.middlewares import RequestIDMiddleware
 from agentic_rag.app.semantic_cache import semantic_cache
+from agentic_rag.app.model_registry import model_registry
+from agentic_rag.app.optimized_workflow import optimized_workflow
 
 # --- Setup Logging ---
 setup_logging()
@@ -49,6 +51,11 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("--- Building and compiling autonomous LangGraph app at startup ---")
+    
+    # --- Pre-load all ML models for performance optimization ---
+    logger.info("🚀 Initializing model registry for performance optimization...")
+    await model_registry.initialize_models()
+    logger.info("✅ Model registry initialized - eliminating per-request model loading overhead")
 
     # --- Use Redis for persistent, shareable state ---
     async with AsyncRedisSaver.from_conn_string(
@@ -214,6 +221,19 @@ class QueryResponse(BaseModel):
     completion_tokens: int
     total_tokens: int
     session_id: str
+    
+
+class OptimizedQueryResponse(BaseModel):
+    answer: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    session_id: str
+    total_time_seconds: float
+    step_timings: dict
+    retrieval_success: bool
+    is_web_search: bool
+    optimization_applied: bool
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -240,6 +260,37 @@ async def query_endpoint(request: QueryRequest):
         completion_tokens=final_state["completion_tokens"],
         total_tokens=final_state["total_tokens"],
         session_id=session_id,
+    )
+
+
+@app.post("/query/optimized", response_model=OptimizedQueryResponse)
+async def optimized_query_endpoint(request: QueryRequest):
+    """
+    🚀 Optimized endpoint using streamlined workflow for 5-10 second response times.
+    
+    Performance improvements:
+    - Pre-loaded models (eliminates 80-90s model loading)
+    - Fast extractive compression (replaces 50s LLM compression)  
+    - Linear workflow (eliminates correction loops)
+    - Smart retrieval as default
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+    logger.info(f"🚀 Received optimized query for session_id: {session_id}")
+
+    # Execute optimized workflow
+    result = await optimized_workflow.execute(request.query, session_id)
+    
+    return OptimizedQueryResponse(
+        answer=result["answer"],
+        prompt_tokens=result["prompt_tokens"],
+        completion_tokens=result["completion_tokens"],
+        total_tokens=result["total_tokens"],
+        session_id=session_id,
+        total_time_seconds=result["total_time_seconds"],
+        step_timings=result["step_timings"],
+        retrieval_success=result["retrieval_success"],
+        is_web_search=result["is_web_search"],
+        optimization_applied=result["optimization_applied"]
     )
 
 
@@ -271,3 +322,9 @@ def get_hnsw_config():
         "index_name": settings.INDEX_NAME,
         "embedding_model": settings.EMBEDDING_MODEL,
     }
+
+
+@app.get("/config/models")
+def get_model_config():
+    """Get current model registry configuration and status."""
+    return model_registry.get_model_info()

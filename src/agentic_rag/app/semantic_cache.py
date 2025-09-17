@@ -23,6 +23,7 @@ import weaviate
 
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
+from agentic_rag.app.model_registry import model_registry
 
 
 class SemanticCache:
@@ -101,10 +102,16 @@ class SemanticCache:
             port=settings.WEAVIATE_PORT
         )
         
-        # Initialize embedding model
-        self.embedding_model = HuggingFaceEmbeddings(
-            model_name=settings.EMBEDDING_MODEL
-        )
+        # Use pre-loaded embedding model from registry for performance optimization
+        self.embedding_model = model_registry.get_embedding_model()
+        if self.embedding_model is None:
+            # Fallback to on-demand loading if registry not initialized
+            logger.warning("⚠️ Model registry not initialized for semantic cache, loading embedding model on-demand")
+            self.embedding_model = HuggingFaceEmbeddings(
+                model_name=settings.EMBEDDING_MODEL
+            )
+        else:
+            logger.debug("✅ Semantic cache using pre-loaded embedding model from registry")
         
         # Create cache vector store
         self.cache_vector_store = WeaviateVectorStore(
