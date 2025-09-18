@@ -19,4 +19,7 @@ tests/
 .pytest_cache/
 
 # ruff cache
-.ruff_cache/
+.ruff_cache/test_fixes.py
+simple_test.py
+integration_test.py
+.env
