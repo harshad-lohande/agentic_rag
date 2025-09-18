@@ -47,7 +47,7 @@ class ModelRegistry:
             if self._initialized:  # Double-check locking
                 return
                 
-            logger.info("🚀 Pre-loading ML models for performance optimization...")
+            logger.info("Pre-loading ML models for performance optimization...")
             start_time = asyncio.get_event_loop().time()
             
             try:
@@ -61,13 +61,13 @@ class ModelRegistry:
                 await self._load_additional_models()
                 
                 elapsed = asyncio.get_event_loop().time() - start_time
-                logger.info(f"✅ All models pre-loaded successfully in {elapsed:.2f}s")
-                logger.info(f"📊 Models cached: {list(self._models.keys())}")
+                logger.info(f"All models pre-loaded successfully in {elapsed:.2f}s")
+                logger.info(f"Models cached: {list(self._models.keys())}")
                 
                 self._initialized = True
                 
             except Exception as e:
-                logger.error(f"❌ Failed to pre-load models: {e}")
+                logger.error(f"Failed to pre-load models: {e}")
                 raise
     
     async def _load_embedding_model(self):
@@ -83,7 +83,7 @@ class ModelRegistry:
         )
         
         self._models['embedding_model'] = embedding_model
-        logger.info(f"✅ Embedding model loaded: {settings.EMBEDDING_MODEL}")
+        logger.info(f"Embedding model loaded: {settings.EMBEDDING_MODEL}")
     
     async def _load_cross_encoders(self):
         """Load CrossEncoder models for reranking."""
@@ -95,7 +95,7 @@ class ModelRegistry:
                 model_name=settings.CROSS_ENCODER_MODEL_SMALL
             )
             self._models['cross_encoder_small'] = small_cross_encoder
-            logger.info(f"✅ Small cross-encoder loaded: {settings.CROSS_ENCODER_MODEL_SMALL}")
+            logger.info(f"Small cross-encoder loaded: {settings.CROSS_ENCODER_MODEL_SMALL}")
         
         # Load large cross-encoder
         if hasattr(settings, 'CROSS_ENCODER_MODEL_LARGE'):
@@ -105,7 +105,7 @@ class ModelRegistry:
                 model_name=settings.CROSS_ENCODER_MODEL_LARGE
             )
             self._models['cross_encoder_large'] = large_cross_encoder
-            logger.info(f"✅ Large cross-encoder loaded: {settings.CROSS_ENCODER_MODEL_LARGE}")
+            logger.info(f"Large cross-encoder loaded: {settings.CROSS_ENCODER_MODEL_LARGE}")
     
     async def _load_additional_models(self):
         """Load any additional models that may be causing performance issues."""

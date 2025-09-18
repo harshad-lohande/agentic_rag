@@ -52,9 +52,9 @@ async def lifespan(app: FastAPI):
     logger.info("--- Building and compiling autonomous LangGraph app at startup ---")
     
     # --- Pre-load all ML models for performance optimization ---
-    logger.info("🚀 Initializing model registry for performance optimization...")
+    logger.info("Initializing model registry for performance optimization...")
     await model_registry.initialize_models()
-    logger.info("✅ Model registry initialized - eliminating per-request model loading overhead")
+    logger.info("Model registry initialized - eliminating per-request model loading overhead")
 
     # --- Use Redis for persistent, shareable state ---
     async with AsyncRedisSaver.from_conn_string(

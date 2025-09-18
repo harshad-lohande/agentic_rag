@@ -5,15 +5,16 @@ import json
 import asyncio
 import time
 import uuid
+import inspect
 import threading
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_weaviate.vectorstores import WeaviateVectorStore
 
 try:
-    import aioredis
+    import redis.asyncio as aioredis
     AIOREDIS_AVAILABLE = True
 except ImportError:
     AIOREDIS_AVAILABLE = False
@@ -93,6 +94,94 @@ class SemanticCache:
                 logger.error(f"Failed to initialize semantic cache: {e}")
                 await self._cleanup_failed_init()
                 return False
+    
+    async def _vector_similarity_search(self, query: str, k: int = 1, score_threshold: float | None = None):
+        """
+        Robust wrapper around the underlying vector store search API.
+        Returns list of tuples: [(doc, score), ...]. Score may be None if unavailable.
+
+        Tries, in order:
+         - cache_vector_store.similarity_search_with_score(...) with best-effort kwargs
+         - cache_vector_store.similarity_search(...) (returns docs only)
+         - cache_vector_store.hybrid(...) or other common variants (without unsupported kwargs)
+        """
+        if not self.cache_vector_store:
+            return []
+
+        def call_sync(fn, *a, **kw):
+            try:
+                return fn(*a, **kw)
+            except TypeError:
+                # try calling without kwargs if signature mismatch
+                try:
+                    return fn(*a)
+                except Exception:
+                    raise
+
+        try:
+            # Preferred method: similarity_search_with_score
+            if hasattr(self.cache_vector_store, "similarity_search_with_score"):
+                fn = getattr(self.cache_vector_store, "similarity_search_with_score")
+                sig = inspect.signature(fn)
+                call_kwargs = {}
+                if "k" in sig.parameters:
+                    call_kwargs["k"] = k
+                elif "top_k" in sig.parameters:
+                    call_kwargs["top_k"] = k
+                if "score_threshold" in sig.parameters and score_threshold is not None:
+                    call_kwargs["score_threshold"] = score_threshold
+                # run in thread if sync
+                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
+                # Expecting [(doc, score), ...] or [doc,...]
+                if not res:
+                    return []
+                # Normalize: if entries are docs only, assign None as score
+                normalized = []
+                for item in res:
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        normalized.append((item[0], item[1]))
+                    else:
+                        normalized.append((item, None))
+                return normalized
+
+            # Fallback: similarity_search (docs only)
+            if hasattr(self.cache_vector_store, "similarity_search"):
+                fn = getattr(self.cache_vector_store, "similarity_search")
+                sig = inspect.signature(fn)
+                call_kwargs = {}
+                if "k" in sig.parameters:
+                    call_kwargs["k"] = k
+                elif "top_k" in sig.parameters:
+                    call_kwargs["top_k"] = k
+                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
+                if not res:
+                    return []
+                return [(doc, None) for doc in res]
+
+            # Fallback: hybrid (weaviate client variants)
+            if hasattr(self.cache_vector_store, "hybrid"):
+                fn = getattr(self.cache_vector_store, "hybrid")
+                sig = inspect.signature(fn)
+                call_kwargs = {}
+                if "top_k" in sig.parameters:
+                    call_kwargs["top_k"] = k
+                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
+                if not res:
+                    return []
+                # try to normalize possible return shapes
+                normalized = []
+                for item in res:
+                    if isinstance(item, tuple) and len(item) >= 2:
+                        normalized.append((item[0], item[1]))
+                    else:
+                        normalized.append((item, None))
+                return normalized
+
+        except Exception as e:
+            logger.debug("Vector similarity search failed: %s", e)
+            return []
+
+        return []
 
     def _init_weaviate_and_embeddings(self):
         """Initialize Weaviate and embeddings in sync context."""
@@ -106,12 +195,12 @@ class SemanticCache:
         self.embedding_model = model_registry.get_embedding_model()
         if self.embedding_model is None:
             # Fallback to on-demand loading if registry not initialized
-            logger.warning("⚠️ Model registry not initialized for semantic cache, loading embedding model on-demand")
+            logger.warning("Model registry not initialized for semantic cache, loading embedding model on-demand")
             self.embedding_model = HuggingFaceEmbeddings(
                 model_name=settings.EMBEDDING_MODEL
             )
         else:
-            logger.debug("✅ Semantic cache using pre-loaded embedding model from registry")
+            logger.debug("Semantic cache using pre-loaded embedding model from registry")
         
         # Create cache vector store
         self.cache_vector_store = WeaviateVectorStore(
@@ -279,12 +368,10 @@ class SemanticCache:
                     return await self._update_cache_access(cache_id, cached_result)
             
             # No exact match, perform semantic search
-            similar_docs = await asyncio.to_thread(
-                self.cache_vector_store.similarity_search_with_score,
-                query, 
-                k=1,
-                score_threshold=settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+            similar_docs = await self._vector_similarity_search(
+                query, k=1, score_threshold=settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD
             )
+
             
             if not similar_docs:
                 logger.debug(f"No cached answer found for query: {query[:50]}...")
@@ -465,7 +552,7 @@ class SemanticCache:
             # Manage cache size atomically
             await self._manage_cache_size_atomic()
             
-            logger.info(f"✅ Cached new answer for query: {query[:50]}...")
+            logger.info(f"Cached new answer for query: {query[:50]}...")
             return True
             
         except Exception as e:
@@ -475,12 +562,7 @@ class SemanticCache:
     async def _find_highly_similar_entries(self, query: str, similarity_threshold: float = 0.98) -> List[Tuple[str, float]]:
         """Find highly similar entries to avoid near-duplicates."""
         try:
-            similar_docs = await asyncio.to_thread(
-                self.cache_vector_store.similarity_search_with_score,
-                query, 
-                k=3,
-                score_threshold=similarity_threshold
-            )
+            similar_docs = await self._vector_similarity_search(query, k=3, score_threshold=similarity_threshold)
             
             similar_entries = []
             for doc, score in similar_docs:

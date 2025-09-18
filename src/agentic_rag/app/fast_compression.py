@@ -1,13 +1,19 @@
 # src/agentic_rag/app/fast_compression.py
 
-import numpy as np
-from typing import List, Optional
+from typing import List
 from langchain_core.documents import Document
-from sentence_transformers import SentenceTransformer, util
 
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 from agentic_rag.app.model_registry import model_registry
+
+try:
+    from sentence_transformers import SentenceTransformer, util  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except Exception:
+    SentenceTransformer = None  # type: ignore
+    util = None  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 
 class FastExtractiveDocs:
@@ -61,7 +67,7 @@ class FastExtractiveDocs:
         if not documents:
             return documents
             
-        logger.info(f"🚀 Fast extractive compression for {len(documents)} documents")
+        logger.info(f"Fast extractive compression for {len(documents)} documents")
         
         try:
             sentence_transformer = self._get_sentence_transformer()
@@ -100,11 +106,11 @@ class FastExtractiveDocs:
             total_compressed = sum(len(doc.page_content) for doc in compressed_docs)
             compression_ratio = total_compressed / total_original if total_original > 0 else 1.0
             
-            logger.info(f"✅ Fast compression complete: {compression_ratio:.2%} of original size retained")
+            logger.info(f"Fast compression complete: {compression_ratio:.2%} of original size retained")
             return compressed_docs
             
         except Exception as e:
-            logger.error(f"❌ Fast compression failed: {e}")
+            logger.error(f"Fast compression failed: {e}")
             # Return original documents if compression fails
             return documents
     
