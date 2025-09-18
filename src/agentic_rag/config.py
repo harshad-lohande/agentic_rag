@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     COMPRESSION_OVERLAP_TOKENS: int = 30
     COMPRESSION_REDUNDANCY_SIM: float = 0.95
     
+    # --- Fast compression settings ---
+    FAST_COMPRESSION_MAX_SENTENCES: int = 6  # Aggressive compression for 60%+ reduction
+    FAST_COMPRESSION_TARGET_RATIO: float = 0.40  # Target 40% of original size (60% reduction)
+    
     # --- Performance optimization settings ---
     ENABLE_FAST_COMPRESSION: bool = True  # Use fast extractive compression instead of LLM-based
     ENABLE_MODEL_PRELOADING: bool = True  # Pre-load models at startup
