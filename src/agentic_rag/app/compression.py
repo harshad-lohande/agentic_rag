@@ -15,6 +15,7 @@ from langchain.text_splitter import TokenTextSplitter
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 from agentic_rag.app.hf_chat import HFChatInference
+from agentic_rag.app.model_registry import model_registry
 
 # OPTIONAL: centralize the numeric cap
 COMPRESSION_MAX_NEW_TOKENS = int(
@@ -107,7 +108,14 @@ def _token_splitter() -> Optional[TokenTextSplitter]:
 
 
 def build_document_compressor() -> DocumentCompressorPipeline:
-    embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    # Use pre-loaded embedding model from registry for performance optimization
+    embeddings = model_registry.get_embedding_model()
+    if embeddings is None:
+        # Fallback to on-demand loading if registry not initialized
+        logger.warning("⚠️ Model registry not initialized for compression, loading embedding model on-demand")
+        embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    else:
+        logger.debug("✅ Document compressor using pre-loaded embedding model from registry")
 
     redundant_filter = EmbeddingsRedundantFilter(
         embeddings=embeddings,

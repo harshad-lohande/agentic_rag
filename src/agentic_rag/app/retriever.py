@@ -1,13 +1,14 @@
 # src/agentic_rag/app/retriever.py
 
 import weaviate
-from langchain_weaviate.vectorstores import WeaviateVectorStore
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
 from typing import Tuple
 
+from agentic_rag.app.weaviate_config import create_weaviate_vector_store
 from agentic_rag.config import settings
-# from agentic_rag.logging_config import logger
+from agentic_rag.app.model_registry import model_registry
+from agentic_rag.logging_config import logger
 
 
 def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
@@ -24,15 +25,22 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
         host=settings.WEAVIATE_HOST, port=settings.WEAVIATE_PORT
     )
 
-    # Instantiate the embedding model that was used for ingestion
-    embedding_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    # Use pre-loaded embedding model from registry for performance optimization
+    embedding_model = model_registry.get_embedding_model()
+    if embedding_model is None:
+        # Fallback to on-demand loading if registry not initialized
+        logger.warning("Model registry not initialized, loading embedding model on-demand")
+        embedding_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    else:
+        logger.debug("Using pre-loaded embedding model from registry")
 
-    # 2. Instantiate the Vector Store object
-    vector_store = WeaviateVectorStore(
+    # 2. Instantiate the Vector Store object with HNSW optimization
+    vector_store = create_weaviate_vector_store(
         client=client,
         index_name=settings.INDEX_NAME,
+        embedding_model=embedding_model,
         text_key="text",
-        embedding=embedding_model,
+        enable_hnsw_optimization=False  # Don't recreate during retrieval
     )
 
     # 3. Create and return the retriever
