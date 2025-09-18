@@ -24,6 +24,10 @@ class FastExtractiveDocs:
     def _get_sentence_transformer(self):
         """Get SentenceTransformer model for sentence-level similarity."""
         if self._sentence_transformer is None:
+            if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                logger.warning("SentenceTransformers not available, cannot use semantic similarity")
+                return None
+                
             # Try to use the same embedding model from registry for consistency
             embedding_model = model_registry.get_embedding_model()
             if embedding_model and hasattr(embedding_model, 'client'):
@@ -34,7 +38,11 @@ class FastExtractiveDocs:
                 model_name = "all-MiniLM-L6-v2"  # Fast and efficient
                 
             logger.debug(f"Loading SentenceTransformer for fast compression: {model_name}")
-            self._sentence_transformer = SentenceTransformer(model_name)
+            try:
+                self._sentence_transformer = SentenceTransformer(model_name)
+            except Exception as e:
+                logger.error(f"Failed to load SentenceTransformer: {e}")
+                return None
             
         return self._sentence_transformer
     
@@ -57,6 +65,12 @@ class FastExtractiveDocs:
         
         try:
             sentence_transformer = self._get_sentence_transformer()
+            
+            # If sentence transformer is not available, return simple truncated documents
+            if sentence_transformer is None:
+                logger.warning("Falling back to simple text truncation for compression")
+                return self._simple_truncate_documents(documents, max_sentences * 50)  # Estimate ~50 chars per sentence
+            
             compressed_docs = []
             
             # Get query embedding once
@@ -94,6 +108,31 @@ class FastExtractiveDocs:
             # Return original documents if compression fails
             return documents
     
+    def _simple_truncate_documents(self, documents: List[Document], max_chars: int) -> List[Document]:
+        """Simple fallback compression when sentence transformers is not available."""
+        compressed_docs = []
+        
+        for doc in documents:
+            content = doc.page_content
+            if len(content) > max_chars:
+                # Simple truncation - could be enhanced with smarter boundary detection
+                truncated_content = content[:max_chars].rsplit(' ', 1)[0] + "..."
+            else:
+                truncated_content = content
+                
+            compressed_doc = Document(
+                page_content=truncated_content,
+                metadata={
+                    **doc.metadata,
+                    "compression_method": "simple_truncation",
+                    "original_length": len(content),
+                    "compressed_length": len(truncated_content)
+                }
+            )
+            compressed_docs.append(compressed_doc)
+            
+        return compressed_docs
+    
     def _extract_relevant_sentences(self, text: str, query_embedding, sentence_transformer, max_sentences: int) -> str:
         """Extract the most relevant sentences from text based on query similarity."""
         
@@ -103,21 +142,31 @@ class FastExtractiveDocs:
         if len(sentences) <= max_sentences:
             return text  # No compression needed
         
-        # Get embeddings for all sentences
-        sentence_embeddings = sentence_transformer.encode(sentences, convert_to_tensor=True)
-        
-        # Calculate similarity scores
-        similarities = util.cos_sim(query_embedding, sentence_embeddings)[0]
-        
-        # Get indices of top sentences
-        top_indices = similarities.argsort(descending=True)[:max_sentences]
-        
-        # Sort indices to maintain original order
-        top_indices = sorted(top_indices.cpu().numpy())
-        
-        # Extract top sentences and join them
-        relevant_sentences = [sentences[i] for i in top_indices]
-        return " ".join(relevant_sentences)
+        try:
+            # Get embeddings for all sentences
+            sentence_embeddings = sentence_transformer.encode(sentences, convert_to_tensor=True)
+            
+            # Calculate similarity scores
+            if SENTENCE_TRANSFORMERS_AVAILABLE:
+                similarities = util.cos_sim(query_embedding, sentence_embeddings)[0]
+                
+                # Get indices of top sentences
+                top_indices = similarities.argsort(descending=True)[:max_sentences]
+                
+                # Sort indices to maintain original order
+                top_indices = sorted(top_indices.cpu().numpy())
+                
+                # Extract top sentences and join them
+                relevant_sentences = [sentences[i] for i in top_indices]
+                return " ".join(relevant_sentences)
+            else:
+                # Simple fallback - take first max_sentences
+                return " ".join(sentences[:max_sentences])
+                
+        except Exception as e:
+            logger.warning(f"Sentence similarity calculation failed: {e}")
+            # Fallback to first max_sentences
+            return " ".join(sentences[:max_sentences])
     
     def _split_into_sentences(self, text: str) -> List[str]:
         """Simple sentence splitting. Could be enhanced with nltk/spacy for better accuracy."""

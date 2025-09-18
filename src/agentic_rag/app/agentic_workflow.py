@@ -26,6 +26,7 @@ from agentic_rag.app.message_utils import (
 from agentic_rag.logging_config import logger
 from agentic_rag.config import settings
 from agentic_rag.app.compression import build_document_compressor
+from agentic_rag.app.fast_compression import fast_compress_documents
 
 # --- Pydantic Models for Structured Output ---
 
@@ -736,8 +737,10 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
 
 def compress_documents(state: GraphState) -> dict:
     """
-    Compresses the (re)ranked documents with respect to the query using a
-    DocumentCompressorPipeline (redundancy filter + LLMChainExtractor + token cap).
+    Compresses the (re)ranked documents with respect to the query.
+    
+    Uses fast extractive compression when ENABLE_FAST_COMPRESSION is True,
+    otherwise falls back to the original LLM-based compression pipeline.
     """
     logger.info("---NODE: CONTEXTUAL COMPRESSION---")
     query = state.get("transformed_query") or get_last_message_content(
@@ -749,11 +752,19 @@ def compress_documents(state: GraphState) -> dict:
         logger.info("No documents to compress.")
         return {"documents": [], "retrieval_success": False}
 
-    compressor = build_document_compressor()
-    compressed_docs = compressor.compress_documents(docs, query=query)
-    compressed_docs = deduplicate_documents(compressed_docs)
+    # Use fast compression if enabled for performance optimization
+    if getattr(settings, 'ENABLE_FAST_COMPRESSION', True):
+        logger.info("🚀 Using fast extractive compression for performance optimization")
+        compressed_docs = fast_compress_documents(docs, query)
+        compressed_docs = deduplicate_documents(compressed_docs)
+        logger.info(f"Fast compression: {len(docs)} docs → {len(compressed_docs)} compressed docs")
+    else:
+        logger.info("Using original LLM-based compression pipeline")
+        compressor = build_document_compressor()
+        compressed_docs = compressor.compress_documents(docs, query=query)
+        compressed_docs = deduplicate_documents(compressed_docs)
+        logger.info(f"LLM compression: {len(docs)} docs → {len(compressed_docs)} snippets")
 
-    logger.info(f"Compressed {len(docs)} docs -> {len(compressed_docs)} snippets")
     return {"documents": compressed_docs, "retrieval_success": bool(compressed_docs)}
 
 
