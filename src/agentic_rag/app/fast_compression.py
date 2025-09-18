@@ -34,6 +34,14 @@ class FastExtractiveDocs:
                 logger.warning("SentenceTransformers not available, cannot use semantic similarity")
                 return None
                 
+            # First, try to get the pre-loaded model from registry
+            preloaded_model = model_registry.get_sentence_transformer_compression()
+            if preloaded_model is not None:
+                logger.debug("Using pre-loaded SentenceTransformer from model registry")
+                self._sentence_transformer = preloaded_model
+                return self._sentence_transformer
+                
+            # Fallback: Load model on-demand if registry is not initialized
             # Try to use the same embedding model from registry for consistency
             embedding_model = model_registry.get_embedding_model()
             if embedding_model and hasattr(embedding_model, 'client'):
@@ -43,7 +51,7 @@ class FastExtractiveDocs:
                 # Fallback to a fast sentence transformer model
                 model_name = "all-MiniLM-L6-v2"  # Fast and efficient
                 
-            logger.debug(f"Loading SentenceTransformer for fast compression: {model_name}")
+            logger.warning(f"Model registry not available, loading SentenceTransformer on-demand: {model_name}")
             try:
                 self._sentence_transformer = SentenceTransformer(model_name)
             except Exception as e:
@@ -105,6 +113,15 @@ class FastExtractiveDocs:
             total_original = sum(len(doc.page_content) for doc in documents)
             total_compressed = sum(len(doc.page_content) for doc in compressed_docs)
             compression_ratio = total_compressed / total_original if total_original > 0 else 1.0
+            
+            # If compression ratio is not aggressive enough, apply additional truncation
+            if compression_ratio > settings.FAST_COMPRESSION_TARGET_RATIO:
+                logger.info(f"Compression ratio {compression_ratio:.2%} exceeds target {settings.FAST_COMPRESSION_TARGET_RATIO:.2%}, applying additional truncation")
+                compressed_docs = self._apply_additional_truncation(compressed_docs, settings.FAST_COMPRESSION_TARGET_RATIO)
+                
+                # Recalculate ratio
+                total_compressed = sum(len(doc.page_content) for doc in compressed_docs)
+                compression_ratio = total_compressed / total_original if total_original > 0 else 1.0
             
             logger.info(f"Fast compression complete: {compression_ratio:.2%} of original size retained")
             return compressed_docs
@@ -185,6 +202,53 @@ class FastExtractiveDocs:
         sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
         
         return sentences
+    
+    def _apply_additional_truncation(self, documents: List[Document], target_ratio: float) -> List[Document]:
+        """Apply additional truncation to meet target compression ratio."""
+        if not documents:
+            return documents
+            
+        # Calculate total current length
+        total_current = sum(len(doc.page_content) for doc in documents)
+        original_total = sum(doc.metadata.get("original_length", len(doc.page_content)) for doc in documents)
+        
+        if original_total == 0:
+            return documents
+            
+        # Calculate target total length
+        target_total = int(original_total * target_ratio)
+        
+        if total_current <= target_total:
+            return documents  # Already meets target
+            
+        # Calculate truncation factor
+        truncation_factor = target_total / total_current
+        
+        truncated_docs = []
+        for doc in documents:
+            current_length = len(doc.page_content)
+            target_length = int(current_length * truncation_factor)
+            
+            if target_length < current_length:
+                # Truncate at word boundaries
+                words = doc.page_content.split()
+                target_words = int(len(words) * truncation_factor)
+                truncated_content = " ".join(words[:max(1, target_words)]) + "..."
+            else:
+                truncated_content = doc.page_content
+                
+            truncated_doc = Document(
+                page_content=truncated_content,
+                metadata={
+                    **doc.metadata,
+                    "additional_truncation": True,
+                    "truncation_factor": truncation_factor,
+                    "compressed_length": len(truncated_content)
+                }
+            )
+            truncated_docs.append(truncated_doc)
+            
+        return truncated_docs
 
 
 # Global instance for reuse
@@ -197,5 +261,9 @@ def fast_compress_documents(documents: List[Document], query: str) -> List[Docum
     
     This provides a 1000x+ speedup over LLM-based compression while maintaining
     reasonable quality by extracting the most relevant sentences.
+    
+    Uses aggressive compression to achieve 60%+ reduction in document size.
     """
-    return fast_extractive_compressor.compress_documents(documents, query)
+    # Use configurable aggressive compression
+    max_sentences = settings.FAST_COMPRESSION_MAX_SENTENCES
+    return fast_extractive_compressor.compress_documents(documents, query, max_sentences=max_sentences)

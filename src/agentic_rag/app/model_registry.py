@@ -9,6 +9,13 @@ from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SentenceTransformer = None
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
 
 class ModelRegistry:
     """
@@ -109,8 +116,19 @@ class ModelRegistry:
     
     async def _load_additional_models(self):
         """Load any additional models that may be causing performance issues."""
-        # This method can be extended to pre-load other models as needed
-        pass
+        # Load the SentenceTransformer model used for fast compression
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            logger.info("Loading SentenceTransformer for fast compression: all-MiniLM-L6-v2")
+            
+            sentence_transformer = await asyncio.to_thread(
+                SentenceTransformer,
+                "all-MiniLM-L6-v2"
+            )
+            
+            self._models['sentence_transformer_compression'] = sentence_transformer
+            logger.info("SentenceTransformer for fast compression loaded: all-MiniLM-L6-v2")
+        else:
+            logger.warning("SentenceTransformers not available - fast compression will fall back to simple truncation")
     
     def get_embedding_model(self) -> Optional[HuggingFaceEmbeddings]:
         """Get the pre-loaded embedding model."""
@@ -133,6 +151,13 @@ class ModelRegistry:
             return None
         return self._models.get('cross_encoder_large')
     
+    def get_sentence_transformer_compression(self) -> Optional[SentenceTransformer]:
+        """Get the pre-loaded SentenceTransformer model for compression."""
+        if not self._initialized:
+            logger.warning("Model registry not initialized. Models may be loaded on-demand.")
+            return None
+        return self._models.get('sentence_transformer_compression')
+    
     def is_initialized(self) -> bool:
         """Check if all models have been pre-loaded."""
         return self._initialized
@@ -143,6 +168,7 @@ class ModelRegistry:
             'embedding_model': settings.EMBEDDING_MODEL,
             'cross_encoder_small': getattr(settings, 'CROSS_ENCODER_MODEL_SMALL', 'Not configured'),
             'cross_encoder_large': getattr(settings, 'CROSS_ENCODER_MODEL_LARGE', 'Not configured'),
+            'sentence_transformer_compression': 'all-MiniLM-L6-v2',
             'initialized': str(self._initialized),
             'loaded_models': list(self._models.keys())
         }

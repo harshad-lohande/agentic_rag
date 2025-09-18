@@ -590,6 +590,9 @@ class SemanticCache:
             existing_entry["access_count"] = existing_entry.get("access_count", 0) + 1
             
             if new_metadata:
+                # Ensure metadata exists before updating
+                if "metadata" not in existing_entry or existing_entry["metadata"] is None:
+                    existing_entry["metadata"] = {}
                 existing_entry["metadata"].update(new_metadata)
             
             # Store updated entry
