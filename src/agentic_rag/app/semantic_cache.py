@@ -412,12 +412,12 @@ class SemanticCache:
 
             cached_query = doc.page_content or ""
 
-            # Stricter defaults; override via env if needed
-            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.97))
-            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.90))
+            # Use configured thresholds for similarity validation
+            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.92))
+            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.85))
             emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
-            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.85))
-            lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.20))
+            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
+            lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
 
             accept = False
             reason = ""
@@ -430,11 +430,12 @@ class SemanticCache:
                     emb_sim = await asyncio.to_thread(self._embedding_similarity, query, cached_query)
                     lex = self._lexical_similarity(query, cached_query)
                     
-                    # Perfect score should have some lexical overlap unless queries are very similar semantically
-                    if emb_sim < 0.8 and lex < 0.1:
+                    # Perfect score should have semantic support - reject if embedding is low AND lexical is very low
+                    # OR if embedding is very low (indicating completely different queries)
+                    if (emb_sim < 0.7 and lex < 0.1) or emb_sim < 0.4:
                         logger.warning(
-                            f"Suspiciously high vector similarity ({similarity_score:.3f}) with low embedding "
-                            f"similarity ({emb_sim:.3f}) and lexical overlap ({lex:.3f}). Rejecting cache hit."
+                            f"Suspiciously high vector similarity ({similarity_score:.3f}) with low semantic support "
+                            f"(emb={emb_sim:.3f}, lex={lex:.3f}). Rejecting cache hit."
                         )
                         return None
                 
@@ -454,6 +455,10 @@ class SemanticCache:
                 elif similarity_score >= vec_min and ce_sim >= ce_min and emb_sim >= (emb_min - 0.03) and lex >= lex_min:
                     accept = True
                     reason = f"vector>={vec_min} & ce>={ce_min} & emb~ & lex>={lex_min} (ce={ce_sim:.3f}, emb={emb_sim:.3f}, lex={lex:.2f})"
+                # Rule 4: more lenient rule for similar queries with good vector similarity and some semantic support
+                elif similarity_score >= (vec_min + 0.02) and (emb_sim >= (emb_min - 0.05) or ce_sim >= (ce_min + 0.05)):
+                    accept = True
+                    reason = f"moderate vector>={vec_min + 0.02} & semantic support (ce={ce_sim:.3f}, emb={emb_sim:.3f})"
 
                 if not accept:
                     logger.info(
