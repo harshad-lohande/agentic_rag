@@ -463,7 +463,7 @@ async def check_semantic_cache(state: GraphState) -> dict:
             # Add cached answer as AI message
             ai_message = AIMessage(content=cached_answer)
             
-            logger.info(f"✅ Cache hit for query: {query[:50]}...")
+            logger.info(f"Cache hit for query: {query[:50]}...")
             
             return {
                 "messages": [ai_message],
@@ -515,7 +515,7 @@ async def store_in_semantic_cache(state: GraphState) -> dict:
         success = await semantic_cache.store_answer(query, answer, cache_metadata)
         
         if success:
-            logger.info(f"✅ Cached answer for query: {query[:50]}...")
+            logger.info(f"Cached answer for query: {query[:50]}...")
         else:
             logger.warning(f"Failed to cache answer for query: {query[:50]}...")
             
@@ -712,12 +712,12 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     cross_encoder = model_registry.get_cross_encoder_small()
     if cross_encoder is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("⚠️ Model registry not initialized for reranking, loading cross-encoder on-demand")
+        logger.warning("Model registry not initialized for reranking, loading cross-encoder on-demand")
         cross_encoder = HuggingFaceCrossEncoder(
             model_name=settings.CROSS_ENCODER_MODEL_SMALL
         )
     else:
-        logger.debug("✅ Using pre-loaded small cross-encoder from registry")
+        logger.debug("Using pre-loaded small cross-encoder from registry")
         
     pairs = [[query, doc.page_content] for doc in documents]
     scores = cross_encoder.score(pairs)
@@ -754,10 +754,9 @@ def compress_documents(state: GraphState) -> dict:
 
     # Use fast compression if enabled for performance optimization
     if getattr(settings, 'ENABLE_FAST_COMPRESSION', True):
-        logger.info("🚀 Using fast extractive compression for performance optimization")
+        logger.info("Using fast extractive compression for performance optimization")
         compressed_docs = fast_compress_documents(docs, query)
         compressed_docs = deduplicate_documents(compressed_docs)
-        logger.info(f"Fast compression: {len(docs)} docs → {len(compressed_docs)} compressed docs")
     else:
         logger.info("Using original LLM-based compression pipeline")
         compressor = build_document_compressor()
@@ -1102,12 +1101,12 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     cross_encoder = model_registry.get_cross_encoder_large()
     if cross_encoder is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("⚠️ Model registry not initialized for smart retrieval, loading large cross-encoder on-demand")
+        logger.warning("Model registry not initialized for smart retrieval, loading large cross-encoder on-demand")
         cross_encoder = HuggingFaceCrossEncoder(
             model_name=settings.CROSS_ENCODER_MODEL_LARGE
         )
     else:
-        logger.debug("✅ Using pre-loaded large cross-encoder from registry")
+        logger.debug("Using pre-loaded large cross-encoder from registry")
         
     # Use the transformed query for scoring (or original if transformation failed)
     scoring_query = transformed_query or original_query

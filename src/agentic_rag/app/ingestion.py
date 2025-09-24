@@ -79,7 +79,9 @@ def ingest_documents():
 
                 all_chunks_for_file = []
                 for parsed_data in doc_generator:
-                    chunks = chunk_text(parsed_data["text"])
+                    chunks = chunk_text(
+                        text=parsed_data["text"], embedding_model=embedding_model
+                    )
 
                     for i, chunk in enumerate(chunks):
                         doc = Document(

@@ -5,7 +5,7 @@ import json
 import asyncio
 import time
 import uuid
-import inspect
+import math
 import threading
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
@@ -21,6 +21,7 @@ except ImportError:
     import redis
 
 import weaviate
+from weaviate.collections.classes.filters import Filter
 
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
@@ -48,7 +49,66 @@ class SemanticCache:
         self._init_lock = threading.Lock()
         self._gc_task = None
         self._shutdown_event = asyncio.Event() if asyncio.iscoroutinefunction(lambda: None) else None
+
+    @staticmethod
+    def _lexical_similarity(text1: str, text2: str) -> float:
+        """Simple token Jaccard overlap for guard-rail decisions."""
+        t1 = set((text1 or "").lower().split())
+        t2 = set((text2 or "").lower().split())
+        if not t1 or not t2:
+            return 0.0
+        inter = len(t1 & t2)
+        union = len(t1 | t2)
+        return inter / union if union else 0.0
     
+    async def _ce_similarity(self, text1: str, text2: str) -> float:
+        """
+        Cross-encoder pairwise similarity in [0,1]. Loaded lazily via model_registry.
+        Runs in a thread to avoid blocking the event loop.
+        """
+        try:
+            ce = model_registry.get_cross_encoder_guard()
+            if ce is None:
+                ce = await model_registry.ensure_cross_encoder_guard()
+            if ce is None:
+                return -1.0
+
+            def _predict():
+                # sentence-transformers CrossEncoder expects list of (a,b) pairs
+                scores = ce.predict([(text1 or "", text2 or "")])
+                s = float(scores[0])
+                # normalize to [0,1] if raw logit-like
+                if s < 0.0 or s > 1.0:
+                    try:
+                        return 1.0 / (1.0 + math.exp(-s))
+                    except OverflowError:
+                        return 0.0 if s < 0 else 1.0
+                return s
+
+            return await asyncio.to_thread(_predict)
+        except Exception:
+            return -1.0
+    
+    def _embedding_similarity(self, text1: str, text2: str) -> float:
+        """
+        Cosine similarity of query embeddings in [0,1].
+        Uses the same embedding model as the cache to be store-agnostic.
+        """
+        try:
+            v1 = self.embedding_model.embed_query(text1 or "")
+            v2 = self.embedding_model.embed_query(text2 or "")
+            if not v1 or not v2:
+                return 0.0
+            dot = sum(a * b for a, b in zip(v1, v2))
+            n1 = math.sqrt(sum(a * a for a in v1))
+            n2 = math.sqrt(sum(b * b for b in v2))
+            if n1 == 0 or n2 == 0:
+                return 0.0
+            cos = dot / (n1 * n2)            # [-1, 1]
+            return (cos + 1.0) / 2.0         # [0, 1]
+        except Exception:
+            return 0.0
+
     async def _initialize_clients(self):
         """Lazy initialization of Redis and Weaviate clients for caching."""
         if self._initialized:
@@ -95,92 +155,62 @@ class SemanticCache:
                 await self._cleanup_failed_init()
                 return False
     
-    async def _vector_similarity_search(self, query: str, k: int = 1, score_threshold: float | None = None):
+    def _normalize_similarity_score(self, score: float | None) -> float | None:
+        """
+        Normalize backend score to similarity in [0,1].
+        If settings.SEMANTIC_CACHE_SCORE_MODE == 'distance', assume cosine distance in [0,2]
+        and map sim = 1 - distance/2.
+        """
+        if score is None:
+            return None
+        mode = getattr(settings, "SEMANTIC_CACHE_SCORE_MODE", "similarity").lower()
+        try:
+            s = float(score)
+        except Exception:
+            return None
+        if mode == "distance":
+            # clamp to [0,2] then invert
+            s = max(0.0, min(2.0, s))
+            return 1.0 - (s / 2.0)
+        return max(0.0, min(1.0, s))
+
+    async def _vector_similarity_search(self, query: str, k: int = 1):
         """
         Robust wrapper around the underlying vector store search API.
-        Returns list of tuples: [(doc, score), ...]. Score may be None if unavailable.
-
-        Tries, in order:
-         - cache_vector_store.similarity_search_with_score(...) with best-effort kwargs
-         - cache_vector_store.similarity_search(...) (returns docs only)
-         - cache_vector_store.hybrid(...) or other common variants (without unsupported kwargs)
+        Returns list of (doc, similarity_in_[0,1]) where higher is better.
         """
         if not self.cache_vector_store:
             return []
 
-        def call_sync(fn, *a, **kw):
-            try:
-                return fn(*a, **kw)
-            except TypeError:
-                # try calling without kwargs if signature mismatch
-                try:
-                    return fn(*a)
-                except Exception:
-                    raise
-
         try:
-            # Preferred method: similarity_search_with_score
             if hasattr(self.cache_vector_store, "similarity_search_with_score"):
-                fn = getattr(self.cache_vector_store, "similarity_search_with_score")
-                sig = inspect.signature(fn)
-                call_kwargs = {}
-                if "k" in sig.parameters:
-                    call_kwargs["k"] = k
-                elif "top_k" in sig.parameters:
-                    call_kwargs["top_k"] = k
-                if "score_threshold" in sig.parameters and score_threshold is not None:
-                    call_kwargs["score_threshold"] = score_threshold
-                # run in thread if sync
-                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
-                # Expecting [(doc, score), ...] or [doc,...]
-                if not res:
+                results = await asyncio.to_thread(
+                    self.cache_vector_store.similarity_search_with_score, query, k=k
+                )
+                if not results:
                     return []
-                # Normalize: if entries are docs only, assign None as score
                 normalized = []
-                for item in res:
+                for item in results:
                     if isinstance(item, tuple) and len(item) >= 2:
-                        normalized.append((item[0], item[1]))
+                        doc, raw = item[0], item[1]
+                        sim = self._normalize_similarity_score(raw)
+                        normalized.append((doc, sim))
                     else:
                         normalized.append((item, None))
                 return normalized
 
-            # Fallback: similarity_search (docs only)
             if hasattr(self.cache_vector_store, "similarity_search"):
-                fn = getattr(self.cache_vector_store, "similarity_search")
-                sig = inspect.signature(fn)
-                call_kwargs = {}
-                if "k" in sig.parameters:
-                    call_kwargs["k"] = k
-                elif "top_k" in sig.parameters:
-                    call_kwargs["top_k"] = k
-                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
-                if not res:
+                logger.debug("Falling back to similarity_search (scores will be unavailable)")
+                results = await asyncio.to_thread(self.cache_vector_store.similarity_search, query, k=k)
+                if not results:
                     return []
-                return [(doc, None) for doc in res]
-
-            # Fallback: hybrid (weaviate client variants)
-            if hasattr(self.cache_vector_store, "hybrid"):
-                fn = getattr(self.cache_vector_store, "hybrid")
-                sig = inspect.signature(fn)
-                call_kwargs = {}
-                if "top_k" in sig.parameters:
-                    call_kwargs["top_k"] = k
-                res = await asyncio.to_thread(call_sync, fn, query, **call_kwargs)
-                if not res:
-                    return []
-                # try to normalize possible return shapes
-                normalized = []
-                for item in res:
-                    if isinstance(item, tuple) and len(item) >= 2:
-                        normalized.append((item[0], item[1]))
-                    else:
-                        normalized.append((item, None))
-                return normalized
+                return [(doc, None) for doc in results]
 
         except Exception as e:
-            logger.debug("Vector similarity search failed: %s", e)
+            logger.error(f"Vector similarity search failed: {e}", exc_info=True)
             return []
 
+        logger.warning("No suitable vector search method found on the cache_vector_store.")
         return []
 
     def _init_weaviate_and_embeddings(self):
@@ -337,23 +367,18 @@ class SemanticCache:
     
     async def get_cached_answer(self, query: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieve a cached answer for semantically similar queries.
-        
-        Args:
-            query: The user query to search for
-            
-        Returns:
-            Cached answer data if found, None otherwise
+        Retrieve a cached answer for a given query. It first checks for an
+        exact match via hashing for maximum speed. If no exact match is found,
+        it performs a semantic search for the most similar query.
         """
         if not await self._is_cache_enabled():
             return None
         
         try:
-            # First check for exact query match using hash
+            # 1. Check for an exact query match first.
             query_hash = self._generate_query_hash(query)
             exact_match_key = f"exact_match:{query_hash}"
             
-            # Check Redis for exact match cache_id
             cache_id = None
             if AIOREDIS_AVAILABLE:
                 cache_id = await self.redis_client.get(exact_match_key)
@@ -361,54 +386,99 @@ class SemanticCache:
                 cache_id = await asyncio.to_thread(self.redis_client.get, exact_match_key)
             
             if cache_id:
-                # Exact match found, retrieve from cache
                 cached_result = await self._get_cache_entry_by_id(cache_id)
                 if cached_result:
-                    logger.info(f"✅ Exact cache hit for query: {query[:50]}...")
+                    logger.info(f"Exact cache hit for query: {query[:50]}...")
                     return await self._update_cache_access(cache_id, cached_result)
             
-            # No exact match, perform semantic search
-            similar_docs = await self._vector_similarity_search(
-                query, k=1, score_threshold=settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD
-            )
-
+            # 2. No exact match, so perform a semantic search.
+            # We fetch the single best candidate and then verify its score.
+            similar_docs = await self._vector_similarity_search(query, k=1)
             
             if not similar_docs:
-                logger.debug(f"No cached answer found for query: {query[:50]}...")
+                logger.debug(f"No similar documents found in cache for query: {query[:50]}...")
                 return None
             
             doc, similarity_score = similar_docs[0]
-            
-            # Validate similarity score orientation and threshold
-            # Note: Different vector stores may return distance vs similarity
-            # For most similarity metrics, higher is better; for distance, lower is better
-            # We assume similarity_search_with_score returns similarity (0-1, higher is better)
-            if similarity_score < settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD:
-                logger.debug(f"Similarity {similarity_score:.3f} below threshold {settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD}")
+
+            # 3. Validate the result using stricter, tiered rules
+            if similarity_score is None:
+                logger.warning("Similarity search returned a document but no score. Cannot validate cache hit.")
                 return None
-            
-            # Get cache entry ID from document metadata
-            cache_id = doc.metadata.get("cache_id")
+
+            cached_query = doc.page_content or ""
+
+            # Stricter defaults; override via env if needed
+            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.97))
+            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.90))
+            emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
+            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.85))
+            lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.20))
+
+            accept = False
+            reason = ""
+
+            # Rule 1: very high vector similarity alone
+            if similarity_score >= vec_accept:
+                accept = True
+                reason = f"vector>={vec_accept}"
+            else:
+                # Compute guards once (non-blocking)
+                emb_sim = await asyncio.to_thread(self._embedding_similarity, query, cached_query)
+                ce_sim = await self._ce_similarity(query, cached_query)
+                lex = self._lexical_similarity(query, cached_query)
+
+                # Rule 2: require BOTH cross-encoder and embedding support with vector above minimum
+                if similarity_score >= vec_min and ce_sim >= ce_min and emb_sim >= emb_min:
+                    accept = True
+                    reason = f"vector>={vec_min} & ce>={ce_min} & emb>={emb_min} (ce={ce_sim:.3f}, emb={emb_sim:.3f})"
+                # Rule 3: tiny lexical support helps borderline cases (still require ce & emb)
+                elif similarity_score >= vec_min and ce_sim >= ce_min and emb_sim >= (emb_min - 0.03) and lex >= lex_min:
+                    accept = True
+                    reason = f"vector>={vec_min} & ce>={ce_min} & emb~ & lex>={lex_min} (ce={ce_sim:.3f}, emb={emb_sim:.3f}, lex={lex:.2f})"
+
+                if not accept:
+                    logger.info(
+                        f"Cache miss. vector={similarity_score:.3f}, emb={emb_sim:.3f}, ce={ce_sim:.3f}, "
+                        f"lex={lex:.2f} did not meet acceptance rules"
+                    )
+                    return None
+
+            cache_id = str(doc.metadata.get("cache_id"))
             if not cache_id:
-                logger.warning("Found similar query but no cache_id in metadata")
+                logger.warning("Found similar document but it is missing a cache_id in its metadata.")
                 return None
-            
-            # Retrieve full cache entry from Redis
+
+            # 4. Fetch entry and alias on true hit
             cached_result = await self._get_cache_entry_by_id(cache_id)
-            
             if not cached_result:
-                logger.debug(f"Cache entry {cache_id} expired or not found in Redis")
-                # Clean up orphaned vector entry
+                logger.warning(f"Cache entry {cache_id} found in vector index but not in Redis. Cleaning up orphan.")
                 doc_id = doc.metadata.get("doc_id")
                 if doc_id:
                     await self._cleanup_orphaned_vector_entry(doc_id)
                 return None
-            
-            logger.info(f"✅ Semantic cache hit for query: {query[:50]}... (similarity: {similarity_score:.3f})")
-            return await self._update_cache_access(cache_id, cached_result)
+
+            logger.info(f"Semantic cache hit ({reason}) for query: {query[:50]}... (sim: {similarity_score:.3f})")
+            cached_result["similarity"] = similarity_score
+            updated = await self._update_cache_access(cache_id, cached_result)
+
+            # Alias only on very high-confidence hits to avoid poisoning
+            try:
+                if reason.startswith("vector>=") and similarity_score >= (vec_accept + 0.01):
+                    qh = self._generate_query_hash(query)
+                    exact_key = f"exact_match:{qh}"
+                    ttl = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+                    if AIOREDIS_AVAILABLE:
+                        await self.redis_client.setex(exact_key, ttl, cache_id)
+                    else:
+                        await asyncio.to_thread(self.redis_client.setex, exact_key, ttl, cache_id)
+            except Exception as e:
+                logger.debug(f"Failed to set exact-match alias for semantic hit: {e}")
+
+            return updated
             
         except Exception as e:
-            logger.error(f"Error retrieving cached answer: {e}")
+            logger.error(f"Error retrieving cached answer: {e}", exc_info=True)
             return None
 
     async def _get_cache_entry_by_id(self, cache_id: str) -> Optional[Dict[str, Any]]:
@@ -461,25 +531,28 @@ class SemanticCache:
     
     async def store_answer(self, query: str, answer: str, metadata: Dict[str, Any] = None) -> bool:
         """
-        Store a query-answer pair in the semantic cache with deduplication.
+        Store a query-answer pair in the semantic cache. It first checks for
+        exact duplicates via hashing. If none are found, it checks for highly
+        similar entries to update instead of creating a new one.
         
         Args:
-            query: The user query
-            answer: The generated answer
-            metadata: Additional metadata (tokens, generation time, etc.)
+            query: The user query.
+            answer: The generated answer.
+            metadata: Additional metadata to store with the entry.
             
         Returns:
-            True if successfully cached, False otherwise
+            True if successfully cached, False otherwise.
         """
         if not await self._is_cache_enabled():
             return False
         
         try:
-            # Check for exact query match first (deduplication)
+            ttl_seconds = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+
+            # 1. Check for an exact query match first for deduplication
             query_hash = self._generate_query_hash(query)
             exact_match_key = f"exact_match:{query_hash}"
             
-            # Check if exact match already exists
             existing_cache_id = None
             if AIOREDIS_AVAILABLE:
                 existing_cache_id = await self.redis_client.get(exact_match_key)
@@ -487,25 +560,138 @@ class SemanticCache:
                 existing_cache_id = await asyncio.to_thread(self.redis_client.get, exact_match_key)
             
             if existing_cache_id:
-                # Update existing entry instead of creating duplicate
-                logger.info(f"Updating existing cache entry for duplicate query: {query[:50]}...")
-                return await self._update_existing_cache_entry(existing_cache_id, answer, metadata)
-            
-            # Check for high semantic similarity to avoid near-duplicates
+                logger.info(f"Updating existing entry due to exact query match: {query[:50]}...")
+                return await self._update_existing_cache_entry(existing_cache_id, query, answer, metadata)
+
+            # 2. Check for a high semantic similarity match to update an existing entry
+            # This makes the cache smarter by consolidating very similar questions.
             similar_entries = await self._find_highly_similar_entries(query)
             if similar_entries:
-                # Update most similar entry instead of creating new one
                 cache_id, similarity = similar_entries[0]
                 logger.info(f"Updating similar cache entry (sim: {similarity:.3f}) for query: {query[:50]}...")
-                return await self._update_existing_cache_entry(cache_id, answer, metadata)
+                return await self._update_existing_cache_entry(cache_id, query, answer, metadata)
             
-            # Generate unique IDs
+            # 3. If no similar entry is found, create a new one
+            return await self._create_new_cache_entry(query, answer, metadata)
+            
+        except Exception as e:
+            logger.error(f"Error storing answer in cache: {e}", exc_info=True)
+            return False
+
+    async def _find_highly_similar_entries(self, query: str) -> List[Tuple[str, float]]:
+        """
+        For the store path, be conservative to avoid wrong merges.
+        """
+        try:
+            similar_docs = await self._vector_similarity_search(query, k=1)
+            out: List[Tuple[str, float]] = []
+            if not similar_docs:
+                return out
+
+            doc, score = similar_docs[0]
+            cache_id = doc.metadata.get("cache_id")
+            if score is None or not cache_id:
+                return out
+
+            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.97))
+            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.90))
+            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.85))
+            emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
+
+            accept = False
+            if score >= vec_accept:
+                accept = True
+            else:
+                ce_sim = await self._ce_similarity(query, doc.page_content or "")
+                emb_sim = await asyncio.to_thread(self._embedding_similarity, query, doc.page_content or "")
+                # For merges, demand BOTH ce and emb support in addition to vector >= vec_min
+                if score >= vec_min and ce_sim >= ce_min and emb_sim >= emb_min:
+                    accept = True
+
+            if accept:
+                out.append((str(cache_id), float(score)))
+            return out
+        except Exception as e:
+            logger.debug(f"Error finding similar entries: {e}")
+            return []
+
+    async def _update_existing_cache_entry(self, cache_id: str, query: str, new_answer: str, new_metadata: Dict[str, Any] = None) -> bool:
+        """
+        Update an existing cache entry. If the Redis entry is missing (orphaned vector),
+        upsert a fresh entry for the current query and clean up the orphaned vector.
+        """
+        try:
+            ttl_seconds = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+            existing_entry = await self._get_cache_entry_by_id(cache_id)
+
+            if not existing_entry:
+                # Orphaned vector: remove and create a fresh entry
+                logger.info(f"Orphaned vector detected for cache_id={cache_id} during update; re-inserting fresh entry.")
+                try:
+                    await self._cleanup_weaviate_vectors([cache_id])
+                except Exception:
+                    logger.debug("Best-effort cleanup of orphaned vector failed for cache_id=%s", cache_id)
+                return await self._create_new_cache_entry(query, new_answer, new_metadata)
+
+            # Normalize metadata container
+            if not isinstance(existing_entry.get("metadata"), dict):
+                existing_entry["metadata"] = {}
+
+            # Apply updates
+            existing_entry["answer"] = new_answer
+            existing_entry["last_accessed"] = datetime.now().isoformat()
+            existing_entry["access_count"] = existing_entry.get("access_count", 0) + 1
+            if new_metadata:
+                try:
+                    existing_entry["metadata"].update(new_metadata)
+                except Exception:
+                    existing_entry["metadata"] = new_metadata
+
+            # Write back to Redis and refresh ZSET position
+            cache_key = self._generate_cache_key(cache_id)
+            payload = json.dumps(existing_entry)
+
+            if AIOREDIS_AVAILABLE:
+                await self.redis_client.setex(cache_key, ttl_seconds, payload)
+                # refresh ZSET score to keep hot entries
+                try:
+                    await self.redis_client.zadd("cache_index", {"%s" % cache_id: int(time.time())})
+                except TypeError:
+                    # some clients expect (key, score, member)
+                    await self.redis_client.zadd("cache_index", int(time.time()), cache_id)
+            else:
+                await asyncio.to_thread(self.redis_client.setex, cache_key, ttl_seconds, payload)
+                try:
+                    await asyncio.to_thread(self.redis_client.zadd, "cache_index", {cache_id: int(time.time())})
+                except TypeError:
+                    await asyncio.to_thread(self.redis_client.zadd, "cache_index", int(time.time()), cache_id)
+
+            # Ensure exact-match mapping is set for this query
+            qhash = self._generate_query_hash(query)
+            exact_key = f"exact_match:{qhash}"
+            if AIOREDIS_AVAILABLE:
+                await self.redis_client.setex(exact_key, ttl_seconds, cache_id)
+            else:
+                await asyncio.to_thread(self.redis_client.setex, exact_key, ttl_seconds, cache_id)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating existing cache entry {cache_id}: {e}")
+            return False
+
+    async def _create_new_cache_entry(self, query: str, answer: str, metadata: Dict[str, Any] | None) -> bool:
+        """
+        Create a fresh cache entry and vector doc (used by upsert fallback when update fails).
+        """
+        try:
+            ttl_seconds = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
             cache_id = str(uuid.uuid4())
             doc_id = str(uuid.uuid4())
             created_ts = int(time.time())
-            
-            # Prepare cache entry
-            cache_entry = {
+            query_hash = self._generate_query_hash(query)
+
+            entry = {
                 "cache_id": cache_id,
                 "doc_id": doc_id,
                 "query": query,
@@ -514,105 +700,36 @@ class SemanticCache:
                 "created_at": datetime.now().isoformat(),
                 "last_accessed": datetime.now().isoformat(),
                 "access_count": 0,
-                "metadata": metadata or {}
+                "metadata": metadata or {},
             }
-            
-            # Store in Redis using atomic Lua script
+
             cache_key = self._generate_cache_key(cache_id)
-            index_key = "cache_index"
-            
             await self._execute_lua_script(
-                'add_cache_entry',
-                keys=[cache_key, index_key],
-                args=[cache_id, json.dumps(cache_entry), str(settings.SEMANTIC_CACHE_TTL), str(created_ts)]
+                "add_cache_entry",
+                keys=[cache_key, "cache_index"],
+                args=[cache_id, json.dumps(entry), str(ttl_seconds), str(created_ts)],
             )
-            
-            # Store exact match mapping
+
+            # exact match mapping
             if AIOREDIS_AVAILABLE:
-                await self.redis_client.setex(exact_match_key, settings.SEMANTIC_CACHE_TTL, cache_id)
+                await self.redis_client.setex(f"exact_match:{query_hash}", ttl_seconds, cache_id)
             else:
-                await asyncio.to_thread(
-                    self.redis_client.setex, exact_match_key, settings.SEMANTIC_CACHE_TTL, cache_id
-                )
-            
-            # Store query vector in Weaviate for similarity search
+                await asyncio.to_thread(self.redis_client.setex, f"exact_match:{query_hash}", ttl_seconds, cache_id)
+
+            # add vector
             cache_doc = Document(
                 page_content=query,
-                metadata={
-                    "cache_id": cache_id,
-                    "doc_id": doc_id,
-                    "query_hash": query_hash,
-                    "created_at": cache_entry["created_at"],
-                    "answer_preview": answer[:200] + "..." if len(answer) > 200 else answer
-                }
+                metadata={"cache_id": cache_id, "doc_id": doc_id, "query_hash": query_hash, "created_at": entry["created_at"],
+                          "answer_preview": answer[:200] + "..." if len(answer) > 200 else answer}
             )
-            
             await asyncio.to_thread(self.cache_vector_store.add_documents, [cache_doc])
-            
-            # Manage cache size atomically
+
+            # enforce size
             await self._manage_cache_size_atomic()
-            
-            logger.info(f"Cached new answer for query: {query[:50]}...")
+            logger.info("Upserted new cache entry for query: %s", query[:50])
             return True
-            
         except Exception as e:
-            logger.error(f"Error storing answer in cache: {e}")
-            return False
-
-    async def _find_highly_similar_entries(self, query: str, similarity_threshold: float = 0.98) -> List[Tuple[str, float]]:
-        """Find highly similar entries to avoid near-duplicates."""
-        try:
-            similar_docs = await self._vector_similarity_search(query, k=3, score_threshold=similarity_threshold)
-            
-            similar_entries = []
-            for doc, score in similar_docs:
-                cache_id = doc.metadata.get("cache_id")
-                if cache_id and score >= similarity_threshold:
-                    similar_entries.append((cache_id, score))
-            
-            return similar_entries
-            
-        except Exception as e:
-            logger.debug(f"Error finding similar entries: {e}")
-            return []
-
-    async def _update_existing_cache_entry(self, cache_id: str, new_answer: str, new_metadata: Dict[str, Any] = None) -> bool:
-        """Update an existing cache entry with new answer/metadata."""
-        try:
-            # Get existing entry
-            existing_entry = await self._get_cache_entry_by_id(cache_id)
-            if not existing_entry:
-                return False
-            
-            # Update with new data
-            existing_entry["answer"] = new_answer
-            existing_entry["last_accessed"] = datetime.now().isoformat()
-            existing_entry["access_count"] = existing_entry.get("access_count", 0) + 1
-            
-            if new_metadata:
-                existing_entry["metadata"].update(new_metadata)
-            
-            # Store updated entry
-            cache_key = self._generate_cache_key(cache_id)
-            
-            if AIOREDIS_AVAILABLE:
-                await self.redis_client.setex(
-                    cache_key, 
-                    settings.SEMANTIC_CACHE_TTL, 
-                    json.dumps(existing_entry)
-                )
-            else:
-                await asyncio.to_thread(
-                    self.redis_client.setex,
-                    cache_key, 
-                    settings.SEMANTIC_CACHE_TTL, 
-                    json.dumps(existing_entry)
-                )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating existing cache entry {cache_id}: {e}")
+            logger.error("Error creating new cache entry (upsert): %s", e)
             return False
     
     async def _manage_cache_size_atomic(self):
@@ -666,7 +783,7 @@ class SemanticCache:
             
             # Delete by metadata filter
             collection.data.delete_many(
-                where={"path": ["cache_id"], "operator": "Equal", "valueString": cache_id}
+                where=Filter.by_property("cache_id").equal(cache_id)
             )
         except Exception as e:
             logger.debug(f"Error deleting Weaviate vector for {cache_id}: {e}")
@@ -702,7 +819,7 @@ class SemanticCache:
         """Background garbage collection loop."""
         gc_interval = getattr(settings, 'SEMANTIC_CACHE_GC_INTERVAL', 3600)  # 1 hour default
         
-        while self._initialized and not self._shutdown_event.is_set():
+        while self._initialized and not (self._shutdown_event and self._shutdown_event.is_set()):
             try:
                 await asyncio.sleep(gc_interval)
                 await self._run_garbage_collection()
@@ -712,48 +829,96 @@ class SemanticCache:
                 logger.error(f"Error in background GC loop: {e}")
                 await asyncio.sleep(60)  # Wait before retrying
 
-    async def _run_garbage_collection(self):
-        """Run garbage collection to clean up orphaned vectors."""
+    async def _run_garbage_collection(self) -> int:
+        """
+        Run garbage collection to clean up expired Redis index entries and orphaned vectors.
+        Returns the total number of cleaned items (Redis index + Weaviate orphans).
+        """
         try:
             logger.info("Running garbage collection for semantic cache")
             
-            # Get all cache_ids from Redis index
+            # Part 1: Clean up stale entries from the Redis cache_index
             index_key = "cache_index"
-            
             if AIOREDIS_AVAILABLE:
-                redis_cache_ids = set(await self.redis_client.zrange(index_key, 0, -1))
+                all_indexed_ids = await self.redis_client.zrange(index_key, 0, -1)
             else:
-                redis_cache_ids = set(await asyncio.to_thread(self.redis_client.zrange, index_key, 0, -1))
+                all_indexed_ids = await asyncio.to_thread(self.redis_client.zrange, index_key, 0, -1)
             
-            # Find orphaned vectors in Weaviate
-            orphaned_vectors = await asyncio.to_thread(self._find_orphaned_vectors, redis_cache_ids)
+            stale_index_ids = []
+            active_redis_ids = set()
+
+            if all_indexed_ids:
+                # Use a pipeline for efficient checking
+                if AIOREDIS_AVAILABLE:
+                    pipe = self.redis_client.pipeline()
+                    for cache_id in all_indexed_ids:
+                        pipe.exists(self._generate_cache_key(cache_id))
+                    exists_results = await pipe.execute()
+                else:
+                    # Sync pipeline execution in thread
+                    def sync_pipeline_exists(keys):
+                        pipe = self.redis_client.pipeline()
+                        for key in keys:
+                            pipe.exists(key)
+                        return pipe.execute()
+                    
+                    batch_keys = [self._generate_cache_key(id) for id in all_indexed_ids]
+                    exists_results = await asyncio.to_thread(sync_pipeline_exists, batch_keys)
+
+                for i, exists in enumerate(exists_results):
+                    if exists:
+                        active_redis_ids.add(all_indexed_ids[i])
+                    else:
+                        stale_index_ids.append(all_indexed_ids[i])
             
+            # Remove all stale entries from the index at once
+            if stale_index_ids:
+                logger.info(f"Found {len(stale_index_ids)} stale entries in Redis index, cleaning up...")
+                if AIOREDIS_AVAILABLE:
+                    await self.redis_client.zrem(index_key, *stale_index_ids)
+                else:
+                    await asyncio.to_thread(self.redis_client.zrem, index_key, *stale_index_ids)
+            
+            # Part 2: Clean up orphaned vectors in Weaviate
+            orphaned_vectors = await asyncio.to_thread(self._find_orphaned_vectors, active_redis_ids)
+            
+            cleaned_count = len(stale_index_ids) + len(orphaned_vectors)
+
             if orphaned_vectors:
                 logger.info(f"Found {len(orphaned_vectors)} orphaned vectors, cleaning up...")
                 for cache_id in orphaned_vectors:
                     await asyncio.to_thread(self._delete_weaviate_vector_by_cache_id, cache_id)
             
-            logger.info("Garbage collection completed")
+            if cleaned_count > 0:
+                logger.info(f"Garbage collection completed. Cleaned {cleaned_count} total items.")
+            else:
+                logger.info("Garbage collection completed, no stale items or orphans found.")
+                
+            return cleaned_count
             
         except Exception as e:
             logger.error(f"Error during garbage collection: {e}")
+            return 0
+
+    async def run_garbage_collection_manually(self) -> int:
+        """Manually triggers a single run of the garbage collection process."""
+        if not await self._is_cache_enabled():
+            logger.error("Cannot run GC: Cache is not enabled or initialized.")
+            return 0
+        return await self._run_garbage_collection()
 
     def _find_orphaned_vectors(self, redis_cache_ids: set) -> List[str]:
-        """Find vectors in Weaviate that don't have corresponding Redis entries (sync method)."""
+        """
+        Find vectors in Weaviate that don't have corresponding Redis entries.
+        This is a sync method for the thread pool and iterates through all objects.
+        """
         try:
-            # Get all cache_ids from Weaviate
             collection = self.weaviate_client.collections.get(settings.SEMANTIC_CACHE_INDEX_NAME)
-            
-            # This is a simplified approach. In production, you'd use proper pagination
-            # and more efficient querying methods based on your Weaviate setup
-            weaviate_docs = collection.query.fetch_objects(
-                limit=1000,  # Adjust based on your cache size
-                return_metadata=["cache_id"]
-            )
-            
             weaviate_cache_ids = set()
-            for doc in weaviate_docs.objects:
-                cache_id = doc.metadata.get("cache_id")
+            
+            # FIX: Iterate through all objects in the collection, not just the first 1000
+            for item in collection.iterator(include_vector=False, return_properties=["cache_id"]):
+                cache_id = item.properties.get("cache_id")
                 if cache_id:
                     weaviate_cache_ids.add(cache_id)
             
@@ -779,7 +944,7 @@ class SemanticCache:
         try:
             collection = self.weaviate_client.collections.get(settings.SEMANTIC_CACHE_INDEX_NAME)
             collection.data.delete_many(
-                where={"path": ["doc_id"], "operator": "Equal", "valueString": doc_id}
+                where=Filter.by_property("doc_id").equal(doc_id)
             )
         except Exception as e:
             logger.debug(f"Error deleting Weaviate vector by doc_id {doc_id}: {e}")
@@ -856,35 +1021,50 @@ class SemanticCache:
             return False
         
         try:
-            # Get all cache entries from index
             index_key = "cache_index"
-            
             if AIOREDIS_AVAILABLE:
                 all_cache_ids = await self.redis_client.zrange(index_key, 0, -1)
             else:
                 all_cache_ids = await asyncio.to_thread(self.redis_client.zrange, index_key, 0, -1)
             
+            # Always attempt to clear Weaviate (handles orphan vectors too)
+            await asyncio.to_thread(self._clear_weaviate_collection)
+
+            # If nothing in Redis index, still return success after Weaviate clear
             if not all_cache_ids:
-                logger.info("Cache is already empty")
+                logger.info("Cache index empty; Weaviate collection cleared (if any).")
+                # Best-effort memory purge to release allocator memory
+                try:
+                    if AIOREDIS_AVAILABLE:
+                        await self.redis_client.execute_command("MEMORY", "PURGE")
+                    else:
+                        await asyncio.to_thread(self.redis_client.execute_command, "MEMORY", "PURGE")
+                except Exception as e:
+                    logger.debug(f"Redis MEMORY PURGE not available: {e}")
                 return True
-            
+
             # Clear Redis entries
             cache_keys = [self._generate_cache_key(cache_id) for cache_id in all_cache_ids]
             exact_match_keys = await self._get_exact_match_keys()
-            
             all_keys_to_delete = cache_keys + exact_match_keys + [index_key]
-            
-            if AIOREDIS_AVAILABLE:
-                if all_keys_to_delete:
+
+            if all_keys_to_delete:
+                # Prefer DEL; UNLINK if you want async-freeing (DEL + PURGE reclaims faster)
+                if AIOREDIS_AVAILABLE:
                     await self.redis_client.delete(*all_keys_to_delete)
-            else:
-                if all_keys_to_delete:
+                else:
                     await asyncio.to_thread(self.redis_client.delete, *all_keys_to_delete)
-            
-            # Clear Weaviate collection
-            await asyncio.to_thread(self._clear_weaviate_collection)
-            
-            logger.info(f"✅ Cleared {len(all_cache_ids)} cache entries")
+
+            # Best-effort memory purge (may not immediately reflect in used_memory_human)
+            try:
+                if AIOREDIS_AVAILABLE:
+                    await self.redis_client.execute_command("MEMORY", "PURGE")
+                else:
+                    await asyncio.to_thread(self.redis_client.execute_command, "MEMORY", "PURGE")
+            except Exception as e:
+                logger.debug(f"Redis MEMORY PURGE not available: {e}")
+
+            logger.info(f"✅ Cleared {len(all_cache_ids)} cache entries (Redis + Weaviate)")
             return True
             
         except Exception as e:
@@ -896,23 +1076,56 @@ class SemanticCache:
         try:
             pattern = "exact_match:*"
             if AIOREDIS_AVAILABLE:
-                return await self.redis_client.keys(pattern)
+                # Use scan for production-safe key iteration
+                keys = []
+                async for key in self.redis_client.scan_iter(pattern):
+                    keys.append(key)
+                return keys
             else:
-                return await asyncio.to_thread(self.redis_client.keys, pattern)
+                # Sync scan
+                return await asyncio.to_thread(
+                    lambda: list(self.redis_client.scan_iter(pattern))
+                )
         except Exception as e:
             logger.debug(f"Error getting exact match keys: {e}")
             return []
 
     def _clear_weaviate_collection(self):
-        """Clear the Weaviate cache collection (sync method for thread pool)."""
+        """
+        Clear the Weaviate cache collection by deleting all objects that have cache_id.
+        Robust against filter quirks by iterating and deleting per cache_id.
+        """
         try:
             collection = self.weaviate_client.collections.get(settings.SEMANTIC_CACHE_INDEX_NAME)
-            
-            # Delete all objects in the collection
-            collection.data.delete_many(where={})
-            
-            logger.info("Cleared Weaviate cache collection")
-            
+
+            # Collect all cache_ids first
+            cache_ids: list[str] = []
+            for item in collection.iterator(include_vector=False, return_properties=["cache_id"]):
+                cid = item.properties.get("cache_id")
+                if cid:
+                    cache_ids.append(str(cid))
+
+            if not cache_ids:
+                logger.info("Weaviate cache collection already empty.")
+                return
+
+            # Delete per cache_id (robust; small N is typical for cache)
+            deleted, failed = 0, 0
+            for cid in cache_ids:
+                try:
+                    res = collection.data.delete_many(where=Filter.by_property("cache_id").equal(cid))
+                    # Some client versions return dict-like results; be tolerant
+                    ok = getattr(res, "successful", None)
+                    if ok is None:
+                        deleted += 1  # assume success if no error thrown
+                    else:
+                        deleted += int(ok)
+                        failed += int(getattr(res, "failed", 0) or 0)
+                except Exception as e:
+                    failed += 1
+                    logger.debug(f"Error deleting Weaviate vector for cache_id={cid}: {e}")
+
+            logger.info(f"Cleared Weaviate cache collection. Results: {deleted} successful, {failed} failed.")
         except Exception as e:
             logger.warning(f"Error clearing Weaviate collection: {e}")
 
