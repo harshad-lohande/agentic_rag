@@ -8,7 +8,6 @@ __pycache__/
 data/
 sample_docs/
 weaviate_data/
-tests/
 
 # specific files
 *.pyc
