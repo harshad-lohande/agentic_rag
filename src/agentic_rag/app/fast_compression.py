@@ -34,22 +34,21 @@ class FastExtractiveDocs:
                 logger.warning("SentenceTransformers not available, cannot use semantic similarity")
                 return None
                 
-            # Try to use the same embedding model from registry for consistency
-            embedding_model = model_registry.get_embedding_model()
-            if embedding_model and hasattr(embedding_model, 'client'):
-                # Use the same model as the embedding model if possible
-                model_name = settings.EMBEDDING_MODEL
-            else:
-                # Fallback to a fast sentence transformer model
-                model_name = "all-MiniLM-L6-v2"  # Fast and efficient
-                
-            logger.debug(f"Loading SentenceTransformer for fast compression: {model_name}")
+            # Prefer the singleton ST from the model registry
+            st = model_registry.get_sentence_transformer_for_compression()
+            if st is not None:
+                self._sentence_transformer = st
+                return self._sentence_transformer
+
+            # On-demand fallback: use the configured embedding model (not a different default)
+            model_name = getattr(settings, "FAST_COMPRESSION_MODEL", "all-MiniLM-L6-v2")
+            logger.debug(f"Loading SentenceTransformer on-demand for compression: {model_name}")
             try:
-                self._sentence_transformer = SentenceTransformer(model_name)
+                self._sentence_transformer = SentenceTransformer(model_name)  # type: ignore[name-defined]
             except Exception as e:
                 logger.error(f"Failed to load SentenceTransformer: {e}")
                 return None
-            
+                       
         return self._sentence_transformer
     
     def compress_documents(self, documents: List[Document], query: str, max_sentences: int = 15) -> List[Document]:

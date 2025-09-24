@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     COMPRESSION_MAX_TOKENS: int = 200
     COMPRESSION_OVERLAP_TOKENS: int = 30
     COMPRESSION_REDUNDANCY_SIM: float = 0.95
-    
+    # Dedicated fast compression SentenceTransformer (singleton)
+    FAST_COMPRESSION_MODEL: str = "all-MiniLM-L6-v2"
+
     # --- Performance optimization settings ---
     ENABLE_FAST_COMPRESSION: bool = True  # Use fast extractive compression instead of LLM-based
     ENABLE_MODEL_PRELOADING: bool = True  # Pre-load models at startup
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
 
     # --- Redis Setting ---
     REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
 
     # --- Provider Settings ---
     LLM_PROVIDER: Literal["openai", "google"] = "openai"
@@ -96,11 +99,24 @@ class Settings(BaseSettings):
     # --- Semantic Caching Configuration ---
     ENABLE_SEMANTIC_CACHE: bool = True
     SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95
-    SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds (1 hour)
+    # Secondary lexical overlap required when accepting high-score semantic hits (0-1)
+    SEMANTIC_CACHE_SECONDARY_LEXICAL_THRESHOLD: float = 0.6
+    SEMANTIC_CACHE_HIGH_CONFIDENCE: float = 0.92
+    SEMANTIC_CACHE_EMBEDDING_GUARD_THRESHOLD: float = 0.82
+    SEMANTIC_CACHE_LEXICAL_GUARD_THRESHOLD: float = 0.20
+    SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds
     SEMANTIC_CACHE_MAX_SIZE: int = 1000  # Maximum number of cached queries
     SEMANTIC_CACHE_INDEX_NAME: str = "SemanticCache"
-    SEMANTIC_CACHE_GC_INTERVAL: int = 3600  # Garbage collection interval in seconds (1 hour)
+    SEMANTIC_CACHE_GC_INTERVAL: int = 3600  # Garbage collection interval in seconds
     SEMANTIC_CACHE_DEDUP_SIMILARITY_THRESHOLD: float = 0.98  # Threshold for deduplication
+
+    # Robust semantic hit acceptance (tunable)
+    SEMANTIC_CACHE_VECTOR_ACCEPT: float = 0.92      # accept on vector >= this
+    SEMANTIC_CACHE_VECTOR_MIN: float = 0.85         # minimal vector for guarded accept
+    SEMANTIC_CACHE_EMB_ACCEPT: float = 0.88         # embedding cosine accept
+    SEMANTIC_CACHE_CE_ACCEPT: float = 0.60          # cross-encoder accept
+    SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15        # tiny lexical support when needed
+
 
 
 settings = Settings()

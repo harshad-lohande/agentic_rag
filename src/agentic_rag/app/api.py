@@ -255,15 +255,15 @@ def health():
 
 
 @app.get("/cache/stats")
-def get_cache_stats():
+async def get_cache_stats():
     """Get semantic cache statistics."""
-    return semantic_cache.get_cache_stats()
+    return await semantic_cache.get_cache_stats()
 
 
 @app.post("/cache/clear")
-def clear_cache():
+async def clear_cache():
     """Clear all cache entries."""
-    success = semantic_cache.clear_cache()
+    success = await semantic_cache.clear_cache()
     return {"success": success, "message": "Cache cleared" if success else "Failed to clear cache"}
 
 

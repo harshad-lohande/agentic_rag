@@ -3,6 +3,8 @@
 from typing import List, Literal, Optional
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.embeddings import Embeddings
+
 
 try:
     # Semantic chunking (LangChain Experimental)
@@ -20,16 +22,16 @@ def chunk_text(
     chunk_size: int = getattr(settings, "CHUNK_SIZE", 500),
     chunk_overlap: int = getattr(settings, "CHUNK_OVERLAP", 50),
     strategy: Optional[Literal["recursive", "semantic"]] = None,
+    embedding_model: Optional[Embeddings] = None,
 ) -> List[str]:
     """
     Split text into chunks using either recursive (default) or semantic chunking.
-
     Args:
         text: Input text to split.
         chunk_size: Used by recursive splitter.
         chunk_overlap: Overlap for recursive or buffer for semantic.
         strategy: "recursive" or "semantic". If None, uses settings.CHUNKING_STRATEGY.
-
+        embedding_model: Pre-loaded embedding model for semantic chunking.
     Returns:
         List[str]: chunks
     """
@@ -46,7 +48,13 @@ def chunk_text(
         else:
             try:
                 logger.info("--- Using SemanticChunker for text chunking ---")
-                embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+                
+                embeddings = (
+                    embedding_model
+                    if embedding_model
+                    else HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+                )
+
                 splitter = SemanticChunker(
                     embeddings=embeddings,
                     breakpoint_threshold_type=getattr(
