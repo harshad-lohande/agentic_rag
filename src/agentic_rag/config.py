@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_EMB_ACCEPT: float = 0.88         # embedding cosine accept
     SEMANTIC_CACHE_CE_ACCEPT: float = 0.60          # cross-encoder accept
     SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15        # tiny lexical support when needed
+    
+    # Score interpretation mode for vector store backends
+    SEMANTIC_CACHE_SCORE_MODE: str = "distance"     # "similarity" or "distance" - Weaviate returns distance scores
 
 
 

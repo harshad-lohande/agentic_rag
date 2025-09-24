@@ -189,11 +189,15 @@ class SemanticCache:
                 )
                 if not results:
                     return []
+                
+                logger.debug(f"Raw vector search results for query '{query[:50]}...': {results}")
+                
                 normalized = []
                 for item in results:
                     if isinstance(item, tuple) and len(item) >= 2:
                         doc, raw = item[0], item[1]
                         sim = self._normalize_similarity_score(raw)
+                        logger.debug(f"Normalized score: raw={raw} -> sim={sim} for cached query: '{doc.page_content[:50]}...'")
                         normalized.append((doc, sim))
                     else:
                         normalized.append((item, None))
@@ -418,8 +422,22 @@ class SemanticCache:
             accept = False
             reason = ""
 
-            # Rule 1: very high vector similarity alone
+            # Rule 1: very high vector similarity alone, but with additional validation
             if similarity_score >= vec_accept:
+                # Additional validation for perfect or near-perfect scores to prevent false positives
+                if similarity_score >= 0.99:
+                    # For very high scores, require additional confirmation
+                    emb_sim = await asyncio.to_thread(self._embedding_similarity, query, cached_query)
+                    lex = self._lexical_similarity(query, cached_query)
+                    
+                    # Perfect score should have some lexical overlap unless queries are very similar semantically
+                    if emb_sim < 0.8 and lex < 0.1:
+                        logger.warning(
+                            f"Suspiciously high vector similarity ({similarity_score:.3f}) with low embedding "
+                            f"similarity ({emb_sim:.3f}) and lexical overlap ({lex:.3f}). Rejecting cache hit."
+                        )
+                        return None
+                
                 accept = True
                 reason = f"vector>={vec_accept}"
             else:
