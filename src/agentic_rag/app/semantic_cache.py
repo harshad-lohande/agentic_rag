@@ -158,8 +158,14 @@ class SemanticCache:
     def _normalize_similarity_score(self, score: float | None) -> float | None:
         """
         Normalize backend score to similarity in [0,1].
-        If settings.SEMANTIC_CACHE_SCORE_MODE == 'distance', assume cosine distance in [0,2]
-        and map sim = 1 - distance/2.
+        
+        IMPORTANT: There appears to be an issue with the Weaviate langchain integration
+        where it may return similarity scores instead of distance scores, despite the
+        documentation stating it returns cosine distances.
+        
+        Based on user testing:
+        - Exact matches return raw score 1.0 but should be distance 0.0
+        - This suggests the scores are actually similarities, not distances
         """
         if score is None:
             return None
@@ -168,11 +174,30 @@ class SemanticCache:
             s = float(score)
         except Exception:
             return None
+        
+        logger.debug(f"Normalizing score: raw={s}, mode={mode}")
+        
         if mode == "distance":
-            # clamp to [0,2] then invert
-            s = max(0.0, min(2.0, s))
-            return 1.0 - (s / 2.0)
-        return max(0.0, min(1.0, s))
+            # INVESTIGATION FINDINGS: The Weaviate langchain integration appears to return
+            # similarity scores (where 1.0 = perfect match) despite claiming to return
+            # distance scores. This is evidenced by:
+            # 1. Exact matches returning raw score 1.0 (should be distance 0.0)
+            # 2. The similarity correlates with embedding similarity, not distance
+            
+            # Detect if we're actually getting similarity scores disguised as distances
+            if s >= 0.95:  # Very high "distance" suggests it's actually similarity
+                logger.info(f"High raw score {s} detected - treating as similarity score instead of distance")
+                return max(0.0, min(1.0, s))  # Treat as similarity directly
+            elif s <= 0.1:  # Very low score - likely actual distance  
+                return 1.0 - s  # Convert distance to similarity
+            else:
+                # Ambiguous range - use original distance formula but log warning
+                logger.warning(f"Ambiguous score {s} - using distance interpretation")
+                s_clamped = max(0.0, min(2.0, s))
+                return 1.0 - (s_clamped / 2.0)
+        else:
+            # Similarity mode - clamp to [0,1]
+            return max(0.0, min(1.0, s))
 
     async def _vector_similarity_search(self, query: str, k: int = 1):
         """
@@ -192,12 +217,27 @@ class SemanticCache:
                 
                 logger.debug(f"Raw vector search results for query '{query[:50]}...': {results}")
                 
+                # DEBUG: Compare vectors for identical queries
+                if results and len(results) > 0:
+                    doc, raw_score = results[0]
+                    if doc.page_content.strip() == query.strip():
+                        # Identical queries - investigate why distance is not 0.0
+                        logger.warning(f"IDENTICAL QUERY VECTOR DEBUG: '{query}' vs '{doc.page_content}' raw_score={raw_score}")
+                        
+                        # Get the embedding that would be generated for this query
+                        try:
+                            query_embedding = self.embedding_model.embed_query(query)
+                            logger.debug(f"Query embedding dimensions: {len(query_embedding) if query_embedding else None}")
+                            logger.debug(f"Query embedding preview: {query_embedding[:5] if query_embedding else None}")
+                        except Exception as e:
+                            logger.error(f"Failed to generate embedding for debugging: {e}")
+                
                 normalized = []
                 for item in results:
                     if isinstance(item, tuple) and len(item) >= 2:
                         doc, raw = item[0], item[1]
                         sim = self._normalize_similarity_score(raw)
-                        logger.debug(f"Normalized score: raw={raw} -> sim={sim} for cached query: '{doc.page_content[:50]}...'")
+                        logger.info(f"Vector search: query='{query[:30]}...' cached='{doc.page_content[:30]}...' raw_score={raw} normalized={sim}")
                         normalized.append((doc, sim))
                     else:
                         normalized.append((item, None))
