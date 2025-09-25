@@ -146,105 +146,87 @@ class SemanticCache:
     
     def _normalize_similarity_score(self, score: float | None) -> float | None:
         """
-        Normalize backend score to similarity in [0,1].
+        DEPRECATED: Normalize backend score to similarity in [0,1].
         
-        IMPORTANT: There appears to be an issue with the Weaviate langchain integration
-        where it may return similarity scores instead of distance scores, despite the
-        documentation stating it returns cosine distances.
-        
-        Based on user testing:
-        - Exact matches return raw score 1.0 but should be distance 0.0
-        - This suggests the scores are actually similarities, not distances
+        This method was used to normalize vector similarity scores from Weaviate,
+        but vector similarity has been replaced with cross-encoder similarity
+        which doesn't require normalization.
         """
-        if score is None:
-            return None
-        mode = getattr(settings, "SEMANTIC_CACHE_SCORE_MODE", "similarity").lower()
-        try:
-            s = float(score)
-        except Exception:
-            return None
+        logger.warning("_normalize_similarity_score is deprecated - vector similarity has been replaced with cross-encoder similarity")
+        return score
+
+    async def _cross_encoder_similarity_search(self, query: str, k: int = 1):
+        """
+        REPLACEMENT for vector similarity search using cross-encoder similarity.
+        This is more reliable than vector similarity which was consistently giving wrong scores.
         
-        logger.debug(f"Normalizing score: raw={s}, mode={mode}")
-        
-        if mode == "distance":
-            # INVESTIGATION FINDINGS: The Weaviate langchain integration appears to return
-            # similarity scores (where 1.0 = perfect match) despite claiming to return
-            # distance scores. This is evidenced by:
-            # 1. Exact matches returning raw score 1.0 (should be distance 0.0)
-            # 2. The similarity correlates with embedding similarity, not distance
+        Args:
+            query: Query to find similar cached entries for
+            k: Number of top similar entries to return
             
-            # Detect if we're actually getting similarity scores disguised as distances
-            if s >= 0.95:  # Very high "distance" suggests it's actually similarity
-                logger.info(f"High raw score {s} detected - treating as similarity score instead of distance")
-                return max(0.0, min(1.0, s))  # Treat as similarity directly
-            elif s <= 0.1:  # Very low score - likely actual distance  
-                return 1.0 - s  # Convert distance to similarity
-            else:
-                # Ambiguous range - use original distance formula but log warning
-                logger.warning(f"Ambiguous score {s} - using distance interpretation")
-                s_clamped = max(0.0, min(2.0, s))
-                return 1.0 - (s_clamped / 2.0)
-        else:
-            # Similarity mode - clamp to [0,1]
-            return max(0.0, min(1.0, s))
-
-    async def _vector_similarity_search(self, query: str, k: int = 1):
+        Returns:
+            List of (doc, similarity_score) tuples sorted by similarity (highest first)
         """
-        Robust wrapper around the underlying vector store search API.
-        Returns list of (doc, similarity_in_[0,1]) where higher is better.
-        """
-        if not self.cache_vector_store:
-            return []
-
         try:
-            if hasattr(self.cache_vector_store, "similarity_search_with_score"):
-                results = await asyncio.to_thread(
-                    self.cache_vector_store.similarity_search_with_score, query, k=k
-                )
-                if not results:
-                    return []
-                
-                logger.debug(f"Raw vector search results for query '{query[:50]}...': {results}")
-                
-                # DEBUG: Compare vectors for identical queries
-                if results and len(results) > 0:
-                    doc, raw_score = results[0]
-                    if doc.page_content.strip() == query.strip():
-                        # Identical queries - investigate why distance is not 0.0
-                        logger.warning(f"IDENTICAL QUERY VECTOR DEBUG: '{query}' vs '{doc.page_content}' raw_score={raw_score}")
-                        
-                        # Get the embedding that would be generated for this query
-                        try:
-                            query_embedding = self.embedding_model.embed_query(query)
-                            logger.debug(f"Query embedding dimensions: {len(query_embedding) if query_embedding else None}")
-                            logger.debug(f"Query embedding preview: {query_embedding[:5] if query_embedding else None}")
-                        except Exception as e:
-                            logger.error(f"Failed to generate embedding for debugging: {e}")
-                
-                normalized = []
-                for item in results:
-                    if isinstance(item, tuple) and len(item) >= 2:
-                        doc, raw = item[0], item[1]
-                        sim = self._normalize_similarity_score(raw)
-                        logger.info(f"Vector search: query='{query[:30]}...' cached='{doc.page_content[:30]}...' raw_score={raw} normalized={sim}")
-                        normalized.append((doc, sim))
+            # Get all cached entries from Redis
+            if AIOREDIS_AVAILABLE:
+                cache_keys = await self.redis_client.keys("cache:*")
+            else:
+                cache_keys = await asyncio.to_thread(self.redis_client.keys, "cache:*")
+            
+            if not cache_keys:
+                logger.debug(f"No cache entries found for cross-encoder search")
+                return []
+            
+            candidates = []
+            
+            # Compare query against each cached query using cross-encoder
+            for cache_key in cache_keys:
+                try:
+                    if AIOREDIS_AVAILABLE:
+                        cache_data = await self.redis_client.hgetall(cache_key)
                     else:
-                        normalized.append((item, None))
-                return normalized
-
-            if hasattr(self.cache_vector_store, "similarity_search"):
-                logger.debug("Falling back to similarity_search (scores will be unavailable)")
-                results = await asyncio.to_thread(self.cache_vector_store.similarity_search, query, k=k)
-                if not results:
-                    return []
-                return [(doc, None) for doc in results]
-
+                        cache_data = await asyncio.to_thread(self.redis_client.hgetall, cache_key)
+                    
+                    if not cache_data or 'query' not in cache_data:
+                        continue
+                    
+                    cached_query = cache_data['query']
+                    cache_id = cache_data.get('cache_id')
+                    doc_id = cache_data.get('doc_id')
+                    
+                    if not cache_id or not cached_query:
+                        continue
+                    
+                    # Use cross-encoder to compute similarity
+                    ce_similarity = await self._ce_similarity(query, cached_query)
+                    
+                    if ce_similarity > 0:  # Only include if we got a valid similarity score
+                        # Create a mock document object similar to what vector search returns
+                        mock_doc = type('MockDoc', (), {
+                            'page_content': cached_query,
+                            'metadata': {
+                                'cache_id': cache_id,
+                                'doc_id': doc_id
+                            }
+                        })()
+                        candidates.append((mock_doc, ce_similarity))
+                        logger.debug(f"Cross-encoder: query='{query[:30]}...' cached='{cached_query[:30]}...' similarity={ce_similarity:.3f}")
+                        
+                except Exception as e:
+                    logger.debug(f"Error processing cache entry {cache_key}: {e}")
+                    continue
+            
+            # Sort by similarity (highest first) and return top k
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            result = candidates[:k]
+            
+            logger.debug(f"Cross-encoder search for '{query[:50]}...': found {len(result)} candidates from {len(cache_keys)} total entries")
+            return result
+            
         except Exception as e:
-            logger.error(f"Vector similarity search failed: {e}", exc_info=True)
+            logger.error(f"Cross-encoder similarity search failed: {e}", exc_info=True)
             return []
-
-        logger.warning("No suitable vector search method found on the cache_vector_store.")
-        return []
 
     def _init_weaviate_and_embeddings(self):
         """Initialize Weaviate and embeddings in sync context."""
@@ -424,9 +406,9 @@ class SemanticCache:
                     logger.info(f"Exact cache hit for query: {query[:50]}...")
                     return await self._update_cache_access(cache_id, cached_result)
             
-            # 2. No exact match, so perform a semantic search.
-            # We fetch the single best candidate and then verify its score.
-            similar_docs = await self._vector_similarity_search(query, k=1)
+            # 2. No exact match, so perform a cross-encoder based semantic search
+            # This replaces unreliable vector similarity search with reliable cross-encoder similarity
+            similar_docs = await self._cross_encoder_similarity_search(query, k=1)
             
             if not similar_docs:
                 logger.debug(f"No similar documents found in cache for query: {query[:50]}...")
@@ -443,15 +425,15 @@ class SemanticCache:
 
             # Use configured thresholds for similarity validation
             # SIMPLIFIED APPROACH: Use only cross-encoder and lexical similarity
-            # Vector similarity and embedding similarity have proven unreliable
+            # The similarity_score from cross-encoder search is already the cross-encoder similarity
             ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
             lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
 
             accept = False
             reason = ""
 
-            # Compute semantic similarities
-            ce_sim = await self._ce_similarity(query, cached_query)
+            # similarity_score is already cross-encoder similarity from the search
+            ce_sim = similarity_score
             lex = self._lexical_similarity(query, cached_query)
 
             # Simplified rules using only reliable similarity measures
@@ -488,13 +470,13 @@ class SemanticCache:
                     await self._cleanup_orphaned_vector_entry(doc_id)
                 return None
 
-            logger.info(f"Semantic cache hit ({reason}) for query: {query[:50]}... (sim: {similarity_score:.3f})")
-            cached_result["similarity"] = similarity_score
+            logger.info(f"Semantic cache hit ({reason}) for query: {query[:50]}... (ce_sim: {ce_sim:.3f})")
+            cached_result["similarity"] = ce_sim
             updated = await self._update_cache_access(cache_id, cached_result)
 
             # Alias only on very high-confidence hits to avoid poisoning
             try:
-                if reason.startswith("vector>=") and similarity_score >= (vec_accept + 0.01):
+                if ce_sim >= 0.90:  # Very high cross-encoder similarity
                     qh = self._generate_query_hash(query)
                     exact_key = f"exact_match:{qh}"
                     ttl = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
@@ -502,6 +484,7 @@ class SemanticCache:
                         await self.redis_client.setex(exact_key, ttl, cache_id)
                     else:
                         await asyncio.to_thread(self.redis_client.setex, exact_key, ttl, cache_id)
+                        logger.debug(f"Created exact match alias for high-confidence hit (ce_sim={ce_sim:.3f})")
             except Exception as e:
                 logger.debug(f"Failed to set exact-match alias for semantic hit: {e}")
 
@@ -611,9 +594,10 @@ class SemanticCache:
     async def _find_highly_similar_entries(self, query: str) -> List[Tuple[str, float]]:
         """
         For the store path, be conservative to avoid wrong merges.
+        Uses cross-encoder similarity instead of unreliable vector similarity.
         """
         try:
-            similar_docs = await self._vector_similarity_search(query, k=1)
+            similar_docs = await self._cross_encoder_similarity_search(query, k=1)
             out: List[Tuple[str, float]] = []
             if not similar_docs:
                 return out
@@ -623,23 +607,26 @@ class SemanticCache:
             if score is None or not cache_id:
                 return out
 
-            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.97))
-            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.90))
-            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.85))
-            emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
+            # Use cross-encoder similarity thresholds (more reliable)
+            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
 
             accept = False
-            if score >= vec_accept:
+            # For storage, be more conservative - require high cross-encoder similarity
+            if score >= 0.80:  # High similarity threshold for merging entries
                 accept = True
-            else:
-                ce_sim = await self._ce_similarity(query, doc.page_content or "")
-                emb_sim = await asyncio.to_thread(self._embedding_similarity, query, doc.page_content or "")
-                # For merges, demand BOTH ce and emb support in addition to vector >= vec_min
-                if score >= vec_min and ce_sim >= ce_min and emb_sim >= emb_min:
+            elif score >= ce_min:
+                # For moderate similarity, also check lexical overlap
+                cached_query = doc.page_content or ""
+                lex_sim = self._lexical_similarity(query, cached_query)
+                if lex_sim >= 0.3:  # Require some lexical overlap for merging
                     accept = True
 
             if accept:
+                logger.info(f"Found similar entry for merging: query='{query[:30]}...' cached='{doc.page_content[:30]}...' ce_sim={score:.3f}")
                 out.append((str(cache_id), float(score)))
+            else:
+                logger.debug(f"Entry not similar enough for merging: ce_sim={score:.3f}")
+                
             return out
         except Exception as e:
             logger.debug(f"Error finding similar entries: {e}")

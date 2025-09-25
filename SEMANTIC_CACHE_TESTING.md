@@ -16,15 +16,22 @@ This framework provides all the features of the `semantic_cache.py` implementati
 - ✅ **Bulk Testing**: Test multiple queries against cached entries efficiently
 - ✅ **Full Cache Features**: All semantic cache functionality (storage, retrieval, GC) works as in the actual workflow
 
-### Similarity Methods Available (Simplified)
-1. **Cross-Encoder Similarity**: Semantic similarity using cross-encoder models (most reliable)
-2. **Lexical Similarity**: Token-based Jaccard similarity for baseline comparison
+### Similarity Methods Available (Cross-Encoder Based)
+1. **Cross-Encoder Similarity**: Direct semantic similarity using cross-encoder models (most reliable and primary method)
+2. **Lexical Similarity**: Token-based Jaccard similarity for baseline comparison and paraphrase detection
 
-### Deprecated/Disabled Methods
-- **Vector Similarity**: Disabled due to unreliable scoring from Weaviate integration
-- **Embedding Similarity**: Disabled due to inconsistent results and performance issues
+### Completely Removed Methods
+- **Vector Similarity**: Completely removed due to persistent unreliable scoring issues (was returning 1.0 for both similar and unrelated queries)
+- **Embedding Similarity**: Removed due to inconsistent results and performance issues
 
-*Note: The semantic cache has been simplified to use only the most reliable similarity measures to prevent false positives and improve accuracy.*
+### 🎯 **Cross-Encoder Approach Benefits**
+- **No false positives**: Eliminates vector similarity issues that were causing unrelated queries to get high similarity scores
+- **Direct semantic understanding**: Cross-encoder models directly assess semantic similarity between query pairs
+- **Consistent scoring**: Similar queries consistently get similar scores, unrelated queries get low scores
+- **Better paraphrase detection**: Handles semantic variations and paraphrases more accurately
+- **Transparent logic**: Easier to debug and understand why queries are considered similar or different
+
+*Note: The semantic cache now uses a completely cross-encoder based approach for finding similar cached entries, eliminating all vector similarity dependencies that were causing scoring issues.*
 
 ## API Endpoints
 
@@ -112,12 +119,13 @@ GET /cache/test/stats
 POST /cache/test/clear
 ```
 
-## Cache Hit Rules (Simplified)
+## Cache Hit Rules (Cross-Encoder Based)
 
-The testing framework uses a simplified 3-rule system focusing on reliable similarity measures:
+The testing framework uses a cross-encoder based approach that completely eliminates vector similarity issues:
 
 ### Rule 1: High Cross-Encoder Similarity (≥0.85)
 - Accepts queries with high cross-encoder similarity (most reliable semantic measure)
+- Uses direct semantic understanding rather than vector similarity
 - No additional validation required due to cross-encoder reliability
 
 ### Rule 2: Cross-Encoder with Lexical Support
@@ -128,7 +136,13 @@ The testing framework uses a simplified 3-rule system focusing on reliable simil
 - Accepts queries with very high lexical similarity (likely paraphrases)
 - Useful for catching variations with same key terms
 
-**Note**: Vector similarity and embedding similarity have been removed due to reliability issues that caused false positives and inconsistent scoring.
+### 🎯 **Key Improvements**
+- **Candidate Selection**: Uses cross-encoder similarity to find similar cached entries instead of unreliable vector search
+- **Direct Scoring**: Cross-encoder scores are used directly without complex normalization
+- **Consistent Results**: Eliminates false positives from vector similarity returning 1.0 for unrelated queries
+- **Better Semantic Understanding**: Cross-encoder models provide more accurate semantic similarity assessment
+
+**Note**: Vector similarity has been completely replaced with cross-encoder similarity throughout the entire cache system, including both candidate selection and similarity validation phases.
 
 ## Usage Examples
 

@@ -289,19 +289,26 @@ class SemanticCacheTester:
             
             # Add testing-specific information
             testing_info = {
-                "testing_framework_version": "2.0.0",
+                "testing_framework_version": "3.0.0",
                 "available_similarity_methods": [
                     "cross_encoder_similarity",
                     "lexical_similarity"
                 ],
-                "disabled_similarity_methods": [
-                    "vector_similarity (unreliable scoring)",
-                    "embedding_similarity (unreliable results)"
+                "completely_removed_methods": [
+                    "vector_similarity (completely removed due to persistent false positive issues)",
+                    "embedding_similarity (removed due to unreliable results)"
                 ],
                 "cache_rules": [
                     "Rule 1: High cross-encoder similarity (≥0.85)",
                     "Rule 2: Cross-encoder & lexical support (ce≥0.60, lex≥0.15)",
                     "Rule 3: High lexical similarity (≥0.4)"
+                ],
+                "approach": "Cross-encoder based candidate selection and validation",
+                "benefits": [
+                    "No vector similarity false positives",
+                    "Direct semantic understanding",
+                    "Consistent and reliable scoring",
+                    "Better paraphrase detection"
                 ],
                 "cache_initialized": self.cache._initialized
             }
