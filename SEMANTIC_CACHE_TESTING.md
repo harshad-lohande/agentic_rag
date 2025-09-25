@@ -16,11 +16,15 @@ This framework provides all the features of the `semantic_cache.py` implementati
 - ✅ **Bulk Testing**: Test multiple queries against cached entries efficiently
 - ✅ **Full Cache Features**: All semantic cache functionality (storage, retrieval, GC) works as in the actual workflow
 
-### Similarity Methods Available
-1. **Vector Similarity**: Uses the same vector store search as the workflow
-2. **Embedding Similarity**: Cosine similarity using the configured embedding model
-3. **Cross-Encoder Similarity**: Semantic similarity using cross-encoder models
-4. **Lexical Similarity**: Token-based Jaccard similarity for baseline comparison
+### Similarity Methods Available (Simplified)
+1. **Cross-Encoder Similarity**: Semantic similarity using cross-encoder models (most reliable)
+2. **Lexical Similarity**: Token-based Jaccard similarity for baseline comparison
+
+### Deprecated/Disabled Methods
+- **Vector Similarity**: Disabled due to unreliable scoring from Weaviate integration
+- **Embedding Similarity**: Disabled due to inconsistent results and performance issues
+
+*Note: The semantic cache has been simplified to use only the most reliable similarity measures to prevent false positives and improve accuracy.*
 
 ## API Endpoints
 
@@ -108,23 +112,23 @@ GET /cache/test/stats
 POST /cache/test/clear
 ```
 
-## Cache Hit Rules
+## Cache Hit Rules (Simplified)
 
-The testing framework uses the same 4-rule system as the actual cache:
+The testing framework uses a simplified 3-rule system focusing on reliable similarity measures:
 
-### Rule 1: High Vector Similarity (≥0.92)
-- Accepts queries with high vector similarity
-- Includes false positive detection for perfect scores (≥0.99)
-- Rejects if embedding <0.7 AND lexical <0.1, OR embedding <0.4
+### Rule 1: High Cross-Encoder Similarity (≥0.85)
+- Accepts queries with high cross-encoder similarity (most reliable semantic measure)
+- No additional validation required due to cross-encoder reliability
 
-### Rule 2: Multi-Metric Validation
-- Requires vector ≥0.85 AND cross-encoder ≥0.60 AND embedding ≥0.88
+### Rule 2: Cross-Encoder with Lexical Support
+- Requires cross-encoder ≥0.60 AND lexical ≥0.15
+- Combines semantic understanding with lexical overlap for robust matching
 
-### Rule 3: Lexical Support for Borderline Cases
-- Requires vector ≥0.85 AND cross-encoder ≥0.60 AND embedding ≥0.85 AND lexical ≥0.15
+### Rule 3: High Lexical Similarity (≥0.4)
+- Accepts queries with very high lexical similarity (likely paraphrases)
+- Useful for catching variations with same key terms
 
-### Rule 4: Lenient Rule for Similar Queries
-- Requires vector ≥0.87 AND (embedding ≥0.83 OR cross-encoder ≥0.65)
+**Note**: Vector similarity and embedding similarity have been removed due to reliability issues that caused false positives and inconsistent scoring.
 
 ## Usage Examples
 

@@ -91,23 +91,12 @@ class SemanticCache:
     
     def _embedding_similarity(self, text1: str, text2: str) -> float:
         """
-        Cosine similarity of query embeddings in [0,1].
-        Uses the same embedding model as the cache to be store-agnostic.
+        DEPRECATED: Cosine similarity of query embeddings in [0,1].
+        This method has been deprecated due to unreliable results.
+        The semantic cache now uses only cross-encoder and lexical similarity.
         """
-        try:
-            v1 = self.embedding_model.embed_query(text1 or "")
-            v2 = self.embedding_model.embed_query(text2 or "")
-            if not v1 or not v2:
-                return 0.0
-            dot = sum(a * b for a, b in zip(v1, v2))
-            n1 = math.sqrt(sum(a * a for a in v1))
-            n2 = math.sqrt(sum(b * b for b in v2))
-            if n1 == 0 or n2 == 0:
-                return 0.0
-            cos = dot / (n1 * n2)            # [-1, 1]
-            return (cos + 1.0) / 2.0         # [0, 1]
-        except Exception:
-            return 0.0
+        logger.warning("_embedding_similarity is deprecated and should not be used")
+        return 0.0
 
     async def _initialize_clients(self):
         """Lazy initialization of Redis and Weaviate clients for caching."""
@@ -453,59 +442,37 @@ class SemanticCache:
             cached_query = doc.page_content or ""
 
             # Use configured thresholds for similarity validation
-            vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.92))
-            vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.85))
-            emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
+            # SIMPLIFIED APPROACH: Use only cross-encoder and lexical similarity
+            # Vector similarity and embedding similarity have proven unreliable
             ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
             lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
 
             accept = False
             reason = ""
 
-            # Rule 1: very high vector similarity alone, but with additional validation
-            if similarity_score >= vec_accept:
-                # Additional validation for perfect or near-perfect scores to prevent false positives
-                if similarity_score >= 0.99:
-                    # For very high scores, require additional confirmation
-                    emb_sim = await asyncio.to_thread(self._embedding_similarity, query, cached_query)
-                    lex = self._lexical_similarity(query, cached_query)
-                    
-                    # Perfect score should have semantic support - reject if embedding is low AND lexical is very low
-                    # OR if embedding is very low (indicating completely different queries)
-                    if (emb_sim < 0.7 and lex < 0.1) or emb_sim < 0.4:
-                        logger.warning(
-                            f"Suspiciously high vector similarity ({similarity_score:.3f}) with low semantic support "
-                            f"(emb={emb_sim:.3f}, lex={lex:.3f}). Rejecting cache hit."
-                        )
-                        return None
-                
+            # Compute semantic similarities
+            ce_sim = await self._ce_similarity(query, cached_query)
+            lex = self._lexical_similarity(query, cached_query)
+
+            # Simplified rules using only reliable similarity measures
+            # Rule 1: High cross-encoder similarity (most reliable semantic measure)
+            if ce_sim >= 0.85:
                 accept = True
-                reason = f"vector>={vec_accept}"
-            else:
-                # Compute guards once (non-blocking)
-                emb_sim = await asyncio.to_thread(self._embedding_similarity, query, cached_query)
-                ce_sim = await self._ce_similarity(query, cached_query)
-                lex = self._lexical_similarity(query, cached_query)
+                reason = f"high cross-encoder similarity (ce={ce_sim:.3f})"
+            # Rule 2: Good cross-encoder with lexical support
+            elif ce_sim >= ce_min and lex >= lex_min:
+                accept = True
+                reason = f"cross-encoder & lexical support (ce={ce_sim:.3f}, lex={lex:.2f})"
+            # Rule 3: Very high lexical similarity (likely paraphrases)
+            elif lex >= 0.4:
+                accept = True
+                reason = f"high lexical similarity (lex={lex:.2f})"
 
-                # Rule 2: require BOTH cross-encoder and embedding support with vector above minimum
-                if similarity_score >= vec_min and ce_sim >= ce_min and emb_sim >= emb_min:
-                    accept = True
-                    reason = f"vector>={vec_min} & ce>={ce_min} & emb>={emb_min} (ce={ce_sim:.3f}, emb={emb_sim:.3f})"
-                # Rule 3: tiny lexical support helps borderline cases (still require ce & emb)
-                elif similarity_score >= vec_min and ce_sim >= ce_min and emb_sim >= (emb_min - 0.03) and lex >= lex_min:
-                    accept = True
-                    reason = f"vector>={vec_min} & ce>={ce_min} & emb~ & lex>={lex_min} (ce={ce_sim:.3f}, emb={emb_sim:.3f}, lex={lex:.2f})"
-                # Rule 4: more lenient rule for similar queries with good vector similarity and some semantic support
-                elif similarity_score >= (vec_min + 0.02) and (emb_sim >= (emb_min - 0.05) or ce_sim >= (ce_min + 0.05)):
-                    accept = True
-                    reason = f"moderate vector>={vec_min + 0.02} & semantic support (ce={ce_sim:.3f}, emb={emb_sim:.3f})"
-
-                if not accept:
-                    logger.info(
-                        f"Cache miss. vector={similarity_score:.3f}, emb={emb_sim:.3f}, ce={ce_sim:.3f}, "
-                        f"lex={lex:.2f} did not meet acceptance rules"
-                    )
-                    return None
+            if not accept:
+                logger.info(
+                    f"Cache miss. ce={ce_sim:.3f}, lex={lex:.2f} did not meet acceptance rules"
+                )
+                return None
 
             cache_id = str(doc.metadata.get("cache_id"))
             if not cache_id:

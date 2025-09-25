@@ -147,44 +147,23 @@ class SemanticCacheTester:
             if not self.cache._initialized:
                 await self.cache.initialize()
             
-            # 1. Vector similarity (requires the cached query to be in vector store)
-            vector_similarity = None
-            try:
-                # Perform vector similarity search
-                similar_docs = await self.cache._vector_similarity_search(test_query, k=10)
-                for doc, score in similar_docs:
-                    if doc.page_content and doc.page_content.strip() == cached_query.strip():
-                        vector_similarity = score
-                        break
-                
-                # If not found in existing cache, we can't get vector similarity
-                if vector_similarity is None:
-                    logger.debug(f"Cached query '{cached_query}' not found in vector store for similarity test")
-            except Exception as e:
-                logger.debug(f"Vector similarity test failed: {e}")
+            # SIMPLIFIED SIMILARITY TESTING
+            # Removed vector and embedding similarity due to reliability issues
+            # Focus on cross-encoder and lexical similarity which are more reliable
             
-            # 2. Embedding similarity
-            embedding_similarity = None
-            try:
-                embedding_similarity = await asyncio.to_thread(
-                    self.cache._embedding_similarity, test_query, cached_query
-                )
-            except Exception as e:
-                logger.debug(f"Embedding similarity test failed: {e}")
-            
-            # 3. Cross-encoder similarity
+            # 1. Cross-encoder similarity
             cross_encoder_similarity = None
             try:
                 cross_encoder_similarity = await self.cache._ce_similarity(test_query, cached_query)
             except Exception as e:
                 logger.debug(f"Cross-encoder similarity test failed: {e}")
             
-            # 4. Lexical similarity (always available)
+            # 2. Lexical similarity (always available)
             lexical_similarity = self.cache._lexical_similarity(test_query, cached_query)
             
-            # 5. Predict cache hit using the same rules as the actual cache
+            # 3. Predict cache hit using the simplified rules
             cache_hit_prediction, rule_triggered = self._predict_cache_hit(
-                vector_similarity, embedding_similarity, cross_encoder_similarity, lexical_similarity
+                cross_encoder_similarity, lexical_similarity
             )
             
             execution_time = (time.time() - start_time) * 1000
@@ -192,8 +171,8 @@ class SemanticCacheTester:
             return SimilarityTestResponse(
                 cached_query=cached_query,
                 test_query=test_query,
-                vector_similarity=vector_similarity,
-                embedding_similarity=embedding_similarity,
+                vector_similarity=None,  # Disabled due to reliability issues
+                embedding_similarity=None,  # Disabled due to reliability issues
                 cross_encoder_similarity=cross_encoder_similarity,
                 lexical_similarity=lexical_similarity,
                 cache_hit_prediction=cache_hit_prediction,
@@ -217,14 +196,11 @@ class SemanticCacheTester:
                 execution_time_ms=round(execution_time, 2)
             )
     
-    def _predict_cache_hit(self, vector_sim: Optional[float], emb_sim: Optional[float],
-                          ce_sim: Optional[float], lex_sim: float) -> Tuple[bool, str]:
+    def _predict_cache_hit(self, ce_sim: Optional[float], lex_sim: float) -> Tuple[bool, str]:
         """
-        Predict whether a query would get a cache hit using the same rules as the actual cache.
+        Predict whether a query would get a cache hit using the simplified rules.
         
         Args:
-            vector_sim: Vector similarity score (0-1, higher is better)
-            emb_sim: Embedding similarity score (0-1, higher is better)
             ce_sim: Cross-encoder similarity score (0-1, higher is better)
             lex_sim: Lexical similarity score (0-1, higher is better)
             
@@ -234,40 +210,26 @@ class SemanticCacheTester:
         # Import settings to get current thresholds
         from agentic_rag.config import settings
         
-        vec_accept = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_ACCEPT", 0.92))
-        vec_min = float(getattr(settings, "SEMANTIC_CACHE_VECTOR_MIN", 0.85))
-        emb_min = float(getattr(settings, "SEMANTIC_CACHE_EMB_ACCEPT", 0.88))
         ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
         lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
         
-        if vector_sim is None:
-            return False, "No vector similarity available"
+        if ce_sim is None:
+            return False, "No cross-encoder similarity available"
         
-        # Rule 1: very high vector similarity alone, with false positive detection
-        if vector_sim >= vec_accept:
-            # Additional validation for perfect or near-perfect scores
-            if vector_sim >= 0.99:
-                if emb_sim is not None and ((emb_sim < 0.7 and lex_sim < 0.1) or emb_sim < 0.4):
-                    return False, f"Rule 1 rejected: Suspicious high vector similarity ({vector_sim:.3f}) with low semantic support"
-            return True, f"Rule 1: High vector similarity ({vector_sim:.3f} >= {vec_accept})"
+        # Simplified rules using only reliable similarity measures
+        # Rule 1: High cross-encoder similarity (most reliable semantic measure)
+        if ce_sim >= 0.85:
+            return True, f"Rule 1: High cross-encoder similarity (ce={ce_sim:.3f})"
         
-        # For other rules, we need embedding and cross-encoder scores
-        if emb_sim is None or ce_sim is None:
-            return False, "Insufficient similarity scores for multi-metric validation"
+        # Rule 2: Good cross-encoder with lexical support
+        if ce_sim >= ce_min and lex_sim >= lex_min:
+            return True, f"Rule 2: Cross-encoder & lexical support (ce={ce_sim:.3f}, lex={lex_sim:.2f})"
         
-        # Rule 2: require BOTH cross-encoder and embedding support with vector above minimum
-        if vector_sim >= vec_min and ce_sim >= ce_min and emb_sim >= emb_min:
-            return True, f"Rule 2: Multi-metric validation (vec={vector_sim:.3f}, ce={ce_sim:.3f}, emb={emb_sim:.3f})"
+        # Rule 3: Very high lexical similarity (likely paraphrases)
+        if lex_sim >= 0.4:
+            return True, f"Rule 3: High lexical similarity (lex={lex_sim:.2f})"
         
-        # Rule 3: tiny lexical support helps borderline cases
-        if vector_sim >= vec_min and ce_sim >= ce_min and emb_sim >= (emb_min - 0.03) and lex_sim >= lex_min:
-            return True, f"Rule 3: Lexical support (vec={vector_sim:.3f}, ce={ce_sim:.3f}, emb={emb_sim:.3f}, lex={lex_sim:.2f})"
-        
-        # Rule 4: more lenient rule for similar queries with good vector similarity and some semantic support
-        if vector_sim >= (vec_min + 0.02) and (emb_sim >= (emb_min - 0.05) or ce_sim >= (ce_min + 0.05)):
-            return True, f"Rule 4: Moderate vector + semantic support (vec={vector_sim:.3f}, ce={ce_sim:.3f}, emb={emb_sim:.3f})"
-        
-        return False, f"No rules triggered (vec={vector_sim:.3f}, ce={ce_sim:.3f}, emb={emb_sim:.3f}, lex={lex_sim:.2f})"
+        return False, f"No rules triggered (ce={ce_sim:.3f}, lex={lex_sim:.2f})"
     
     async def test_cache_retrieval(self, query: str) -> CacheTestResponse:
         """
@@ -327,18 +289,19 @@ class SemanticCacheTester:
             
             # Add testing-specific information
             testing_info = {
-                "testing_framework_version": "1.0.0",
+                "testing_framework_version": "2.0.0",
                 "available_similarity_methods": [
-                    "vector_similarity",
-                    "embedding_similarity", 
                     "cross_encoder_similarity",
                     "lexical_similarity"
                 ],
+                "disabled_similarity_methods": [
+                    "vector_similarity (unreliable scoring)",
+                    "embedding_similarity (unreliable results)"
+                ],
                 "cache_rules": [
-                    "Rule 1: High vector similarity (≥0.92) with false positive detection",
-                    "Rule 2: Multi-metric validation (vector + cross-encoder + embedding)",
-                    "Rule 3: Lexical support for borderline cases",
-                    "Rule 4: Lenient rule for similar queries (vector ≥0.87 + semantic support)"
+                    "Rule 1: High cross-encoder similarity (≥0.85)",
+                    "Rule 2: Cross-encoder & lexical support (ce≥0.60, lex≥0.15)",
+                    "Rule 3: High lexical similarity (≥0.4)"
                 ],
                 "cache_initialized": self.cache._initialized
             }
