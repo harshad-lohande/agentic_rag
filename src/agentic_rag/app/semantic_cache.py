@@ -168,34 +168,30 @@ class SemanticCache:
             List of (doc, similarity_score) tuples sorted by similarity (highest first)
         """
         try:
-            # Get all cached entries from Redis
+            # Get all cached entry IDs from the sorted set index
             if AIOREDIS_AVAILABLE:
-                cache_keys = await self.redis_client.keys("cache:*")
+                cache_ids = await self.redis_client.zrange("cache_index", 0, -1)
             else:
-                cache_keys = await asyncio.to_thread(self.redis_client.keys, "cache:*")
+                cache_ids = await asyncio.to_thread(self.redis_client.zrange, "cache_index", 0, -1)
             
-            if not cache_keys:
+            if not cache_ids:
                 logger.debug(f"No cache entries found for cross-encoder search")
                 return []
             
             candidates = []
             
             # Compare query against each cached query using cross-encoder
-            for cache_key in cache_keys:
+            for cache_id in cache_ids:
                 try:
-                    if AIOREDIS_AVAILABLE:
-                        cache_data = await self.redis_client.hgetall(cache_key)
-                    else:
-                        cache_data = await asyncio.to_thread(self.redis_client.hgetall, cache_key)
-                    
-                    if not cache_data or 'query' not in cache_data:
+                    # Get the full cache entry
+                    cache_entry = await self._get_cache_entry_by_id(cache_id)
+                    if not cache_entry:
                         continue
                     
-                    cached_query = cache_data['query']
-                    cache_id = cache_data.get('cache_id')
-                    doc_id = cache_data.get('doc_id')
+                    cached_query = cache_entry.get('query')
+                    doc_id = cache_entry.get('doc_id')
                     
-                    if not cache_id or not cached_query:
+                    if not cached_query:
                         continue
                     
                     # Use cross-encoder to compute similarity
@@ -214,14 +210,14 @@ class SemanticCache:
                         logger.debug(f"Cross-encoder: query='{query[:30]}...' cached='{cached_query[:30]}...' similarity={ce_similarity:.3f}")
                         
                 except Exception as e:
-                    logger.debug(f"Error processing cache entry {cache_key}: {e}")
+                    logger.debug(f"Error processing cache entry {cache_id}: {e}")
                     continue
             
             # Sort by similarity (highest first) and return top k
             candidates.sort(key=lambda x: x[1], reverse=True)
             result = candidates[:k]
             
-            logger.debug(f"Cross-encoder search for '{query[:50]}...': found {len(result)} candidates from {len(cache_keys)} total entries")
+            logger.debug(f"Cross-encoder search for '{query[:50]}...': found {len(result)} candidates from {len(cache_ids)} total entries")
             return result
             
         except Exception as e:

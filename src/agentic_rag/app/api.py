@@ -1,7 +1,7 @@
 # src/agentic_rag/app/api.py
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
@@ -329,14 +329,34 @@ async def test_query_similarity(request: SimilarityTestRequest):
 
 
 @app.post("/cache/test/retrieval", response_model=CacheTestResponse)
-async def test_cache_retrieval(query: str):
+async def test_cache_retrieval(query: str = None, request: Request = None):
     """
     Test cache retrieval for a given query.
     
     This endpoint tests whether a query would get a cache hit
     using the same logic as the actual workflow, without executing
     the full graph.
+    
+    Query can be provided either as a query parameter or in the request body.
     """
+    # Try to get query from query parameters first
+    if not query and request:
+        query = request.query_params.get('query')
+    
+    # If still no query, try to get from request body
+    if not query and request:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                query = body.get('query')
+            elif isinstance(body, str):
+                query = body
+        except:
+            pass
+    
+    if not query:
+        raise HTTPException(status_code=400, detail="Query parameter is required")
+    
     return await semantic_cache_tester.test_cache_retrieval(query)
 
 
