@@ -22,16 +22,20 @@ class Settings(BaseSettings):
     FAST_COMPRESSION_MODEL: str = "all-MiniLM-L6-v2"
 
     # --- Performance optimization settings ---
-    ENABLE_FAST_COMPRESSION: bool = True  # Use fast extractive compression instead of LLM-based
+    ENABLE_FAST_COMPRESSION: bool = (
+        True  # Use fast extractive compression instead of LLM-based
+    )
     ENABLE_MODEL_PRELOADING: bool = True  # Pre-load models at startup
-    ENABLE_OPTIMIZED_WORKFLOW: bool = True  # Use streamlined workflow without correction loops
+    ENABLE_OPTIMIZED_WORKFLOW: bool = (
+        True  # Use streamlined workflow without correction loops
+    )
 
     # --- Compression LLM (open-source) ---
     COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
         "ollama"
     )
     HF_COMPRESSION_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
-    HUGGINGFACEHUB_API_TOKEN: str
+    HUGGINGFACEHUB_API_TOKEN: str = ""
 
     # --- Optional Ollama alternative (if you run an Ollama server) ---
     OLLAMA_HOST: str = "http://localhost:11434"
@@ -65,16 +69,16 @@ class Settings(BaseSettings):
     OPENAI_MAIN_MODEL_NAME: str = "gpt-4.1-mini"
     OPENAI_FAST_MODEL_NAME: str = "gpt-4.1-nano"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    OPENAI_API_KEY: str
+    OPENAI_API_KEY: str = ""
 
     # --- Google Settings ---
     GOOGLE_MAIN_MODEL_NAME: str = "gemini-2.5-flash"
     GOOGLE_FAST_MODEL_NAME: str = "gemini-2.5-flash-lite"
     GOOGLE_EMBEDDING_MODEL: str = "models/text-embedding-004"
-    GOOGLE_API_KEY: str
+    GOOGLE_API_KEY: str = ""
 
     LANGCHAIN_TRACING_V2: str = "true"
-    LANGCHAIN_API_KEY: str
+    LANGCHAIN_API_KEY: str = ""
     LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
     LANGCHAIN_PROJECT: str = "Agentic RAG System"
 
@@ -87,36 +91,31 @@ class Settings(BaseSettings):
     # efConstruction: Higher values create more accurate index (build-time)
     # Recommended range: 64-512, higher for better accuracy/slower builds
     HNSW_EF_CONSTRUCTION: int = 256
-    
+
     # ef: Query-time search parameter (runtime)
     # Recommended range: 16-256, higher for better accuracy/slower queries
     HNSW_EF: int = 64
-    
+
     # maxConnections: Max connections per node in HNSW graph
     # Recommended range: 16-64, higher for better recall/more memory
     HNSW_MAX_CONNECTIONS: int = 32
 
     # --- Semantic Caching Configuration ---
     ENABLE_SEMANTIC_CACHE: bool = True
-    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95
-    # Secondary lexical overlap required when accepting high-score semantic hits (0-1)
-    SEMANTIC_CACHE_SECONDARY_LEXICAL_THRESHOLD: float = 0.6
-    SEMANTIC_CACHE_HIGH_CONFIDENCE: float = 0.92
-    SEMANTIC_CACHE_EMBEDDING_GUARD_THRESHOLD: float = 0.82
-    SEMANTIC_CACHE_LEXICAL_GUARD_THRESHOLD: float = 0.20
+    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.85
     SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds
     SEMANTIC_CACHE_MAX_SIZE: int = 1000  # Maximum number of cached queries
     SEMANTIC_CACHE_INDEX_NAME: str = "SemanticCache"
     SEMANTIC_CACHE_GC_INTERVAL: int = 3600  # Garbage collection interval in seconds
-    SEMANTIC_CACHE_DEDUP_SIMILARITY_THRESHOLD: float = 0.98  # Threshold for deduplication
 
     # Robust semantic hit acceptance (tunable)
-    SEMANTIC_CACHE_VECTOR_ACCEPT: float = 0.92      # accept on vector >= this
-    SEMANTIC_CACHE_VECTOR_MIN: float = 0.85         # minimal vector for guarded accept
-    SEMANTIC_CACHE_EMB_ACCEPT: float = 0.88         # embedding cosine accept
-    SEMANTIC_CACHE_CE_ACCEPT: float = 0.60          # cross-encoder accept
-    SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15        # tiny lexical support when needed
-
+    SEMANTIC_CACHE_CE_ACCEPT: float = 0.60  # cross-encoder accept
+    SEMANTIC_CE_SIM_HIGH: float = 0.90  # high cross-encoder support when needed
+    SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15  # tiny lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.4  # high lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_MODERATE: float = (
+        0.30  # lexical support for moderate similarity
+    )
 
 
 settings = Settings()

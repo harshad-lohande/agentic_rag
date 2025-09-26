@@ -52,6 +52,13 @@ Since the initial version, we’ve added a number of robustness, quality, and de
   - A dedicated one-off task runner for ingestion in docker-compose.
   - Run on demand with docker compose run --rm ingestion-worker; it exits when done.
 
+- **HNSW Index Parameters Optimization**
+  - Fine-tuned vector search performance for Weaviate
+
+- **Semantic Caching System**
+  - Sub-50ms response times for common queries. For more details [click here](docs/SEMANTIC_CACHE_COMPREHENSIVE_GUIDE.md)
+
+
 ---
 
 ## **Core Features**
@@ -75,6 +82,10 @@ Since the initial version, we’ve added a number of robustness, quality, and de
 ---
 
 ## **How the Agent Works (Highlights)**
+
+- **Check Semantic Cache**
+  - Checks if the user query (exact as well as semantic) already exists in cache.
+  - If cache is hit, a sub-50ms response is provided to the user's query. If cache miss, follows the normal RAG workflow
 
 - **Query classification**
   - Classifies simple vs complex to decide whether to rewrite.
@@ -453,7 +464,6 @@ The evaluation measures the following key metrics:
 
 ## **Future Ideas and Roadmap**
 
-* **Semantic Cache**: Embed the incoming user query. Perform a vector search against a dedicated "cache" index in Redis instance.
 * **CI/CD for AI Quality**: Add a step in existing CI workflow that runs the RAGAS evaluation. Compare the metrics from newly generated eval results with the baseline metrics to prevent deploying a regression.
 * **Deployment**: Package and deploy the application to a scalable, production-ready environment like Google Cloud Run or AWS App Runner.
 

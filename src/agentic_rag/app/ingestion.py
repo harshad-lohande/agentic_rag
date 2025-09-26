@@ -8,7 +8,10 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 from agentic_rag.app.document_parser import DocumentParser
 from agentic_rag.app.chunking_strategy import chunk_text
-from agentic_rag.app.weaviate_config import create_weaviate_vector_store, create_semantic_cache_collection
+from agentic_rag.app.weaviate_config import (
+    create_weaviate_vector_store,
+    create_semantic_cache_collection,
+)
 from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 
@@ -67,7 +70,7 @@ def ingest_documents():
             index_name=INDEX_NAME,
             embedding_model=embedding_model,
             text_key="text",
-            enable_hnsw_optimization=True
+            enable_hnsw_optimization=True,
         )
 
         total_chunks_indexed = 0

@@ -112,10 +112,14 @@ def build_document_compressor() -> DocumentCompressorPipeline:
     embeddings = model_registry.get_embedding_model()
     if embeddings is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("⚠️ Model registry not initialized for compression, loading embedding model on-demand")
+        logger.warning(
+            "⚠️ Model registry not initialized for compression, loading embedding model on-demand"
+        )
         embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
     else:
-        logger.debug("✅ Document compressor using pre-loaded embedding model from registry")
+        logger.debug(
+            "✅ Document compressor using pre-loaded embedding model from registry"
+        )
 
     redundant_filter = EmbeddingsRedundantFilter(
         embeddings=embeddings,

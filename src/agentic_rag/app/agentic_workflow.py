@@ -447,24 +447,24 @@ async def check_semantic_cache(state: GraphState) -> dict:
     If found, return it directly and mark as cache hit.
     """
     query = get_last_human_message_content(state["messages"])
-    
+
     if not query or not state.get("cache_enabled", True):
         logger.debug("Semantic cache disabled or no query found")
         return {"cache_hit": False, "cache_query": query}
-    
+
     try:
         cached_result = await semantic_cache.get_cached_answer(query)
-        
+
         if cached_result:
             # Cache hit - return cached answer
             cached_answer = cached_result["answer"]
             cached_metadata = cached_result.get("metadata", {})
-            
+
             # Add cached answer as AI message
             ai_message = AIMessage(content=cached_answer)
-            
+
             logger.info(f"Cache hit for query: {query[:50]}...")
-            
+
             return {
                 "messages": [ai_message],
                 "cache_hit": True,
@@ -479,7 +479,7 @@ async def check_semantic_cache(state: GraphState) -> dict:
             # Cache miss - continue with normal flow
             logger.debug(f"Cache miss for query: {query[:50]}...")
             return {"cache_hit": False, "cache_query": query}
-            
+
     except Exception as e:
         logger.error(f"Error checking semantic cache: {e}")
         return {"cache_hit": False, "cache_query": query}
@@ -492,14 +492,16 @@ async def store_in_semantic_cache(state: GraphState) -> dict:
     if not state.get("cache_enabled", True) or state.get("cache_hit", False):
         # Don't cache if caching is disabled or this was already a cache hit
         return {}
-    
-    query = state.get("cache_query") or get_last_human_message_content(state["messages"])
+
+    query = state.get("cache_query") or get_last_human_message_content(
+        state["messages"]
+    )
     answer = get_last_ai_message_content(state["messages"])
-    
+
     if not query or not answer:
         logger.debug("No query or answer to cache")
         return {}
-    
+
     try:
         # Prepare metadata for caching
         cache_metadata = {
@@ -511,17 +513,17 @@ async def store_in_semantic_cache(state: GraphState) -> dict:
             "is_web_search": state.get("is_web_search", False),
             "documents_used": len(state.get("documents", [])),
         }
-        
+
         success = await semantic_cache.store_answer(query, answer, cache_metadata)
-        
+
         if success:
             logger.info(f"Cached answer for query: {query[:50]}...")
         else:
             logger.warning(f"Failed to cache answer for query: {query[:50]}...")
-            
+
     except Exception as e:
         logger.error(f"Error storing answer in cache: {e}")
-    
+
     return {}
 
 
@@ -712,13 +714,15 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     cross_encoder = model_registry.get_cross_encoder_small()
     if cross_encoder is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("Model registry not initialized for reranking, loading cross-encoder on-demand")
+        logger.warning(
+            "Model registry not initialized for reranking, loading cross-encoder on-demand"
+        )
         cross_encoder = HuggingFaceCrossEncoder(
             model_name=settings.CROSS_ENCODER_MODEL_SMALL
         )
     else:
         logger.debug("Using pre-loaded small cross-encoder from registry")
-        
+
     pairs = [[query, doc.page_content] for doc in documents]
     scores = cross_encoder.score(pairs)
     scored_docs = list(zip(documents, scores))
@@ -738,7 +742,7 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
 def compress_documents(state: GraphState) -> dict:
     """
     Compresses the (re)ranked documents with respect to the query.
-    
+
     Uses fast extractive compression when ENABLE_FAST_COMPRESSION is True,
     otherwise falls back to the original LLM-based compression pipeline.
     """
@@ -753,7 +757,7 @@ def compress_documents(state: GraphState) -> dict:
         return {"documents": [], "retrieval_success": False}
 
     # Use fast compression if enabled for performance optimization
-    if getattr(settings, 'ENABLE_FAST_COMPRESSION', True):
+    if getattr(settings, "ENABLE_FAST_COMPRESSION", True):
         logger.info("Using fast extractive compression for performance optimization")
         compressed_docs = fast_compress_documents(docs, query)
         compressed_docs = deduplicate_documents(compressed_docs)
@@ -762,7 +766,9 @@ def compress_documents(state: GraphState) -> dict:
         compressor = build_document_compressor()
         compressed_docs = compressor.compress_documents(docs, query=query)
         compressed_docs = deduplicate_documents(compressed_docs)
-        logger.info(f"LLM compression: {len(docs)} docs → {len(compressed_docs)} snippets")
+        logger.info(
+            f"LLM compression: {len(docs)} docs → {len(compressed_docs)} snippets"
+        )
 
     return {"documents": compressed_docs, "retrieval_success": bool(compressed_docs)}
 
@@ -1101,13 +1107,15 @@ def smart_retrieval_and_rerank(state: GraphState) -> dict:
     cross_encoder = model_registry.get_cross_encoder_large()
     if cross_encoder is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("Model registry not initialized for smart retrieval, loading large cross-encoder on-demand")
+        logger.warning(
+            "Model registry not initialized for smart retrieval, loading large cross-encoder on-demand"
+        )
         cross_encoder = HuggingFaceCrossEncoder(
             model_name=settings.CROSS_ENCODER_MODEL_LARGE
         )
     else:
         logger.debug("Using pre-loaded large cross-encoder from registry")
-        
+
     # Use the transformed query for scoring (or original if transformation failed)
     scoring_query = transformed_query or original_query
     pairs = [[scoring_query, doc.page_content] for doc in candidate_pool]
@@ -1257,7 +1265,7 @@ def route_after_cache_check(state: GraphState) -> str:
     Routes based on semantic cache check results.
     """
     logger.info("---ROUTER: ROUTE AFTER CACHE CHECK---")
-    
+
     if state.get("cache_hit", False):
         logger.info("Cache hit - routing to cache storage and end")
         return "store_cache"
@@ -1271,10 +1279,10 @@ def route_after_generation_with_cache(state: GraphState) -> str:
     Enhanced routing after answer generation that includes cache storage.
     """
     logger.info("---ROUTER: ROUTE AFTER GENERATION WITH CACHE---")
-    
+
     # First check if this needs safety/grounding check
     is_web_search = state.get("is_web_search", False)
-    
+
     if is_web_search:
         logger.info("Web search answer - routing to web search safety check then cache")
         return "web_search_safety_check"

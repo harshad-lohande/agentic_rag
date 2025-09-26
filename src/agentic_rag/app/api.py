@@ -1,7 +1,7 @@
 # src/agentic_rag/app/api.py
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
@@ -42,6 +42,13 @@ from agentic_rag.config import settings
 from agentic_rag.app.middlewares import RequestIDMiddleware
 from agentic_rag.app.semantic_cache import semantic_cache
 from agentic_rag.app.model_registry import model_registry
+from agentic_rag.testing.semantic_cache_tester import (
+    semantic_cache_tester,
+    CacheEntryRequest,
+    SimilarityTestRequest,
+    SimilarityTestResponse,
+    CacheTestResponse,
+)
 
 # --- Setup Logging ---
 setup_logging()
@@ -50,11 +57,13 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("--- Building and compiling autonomous LangGraph app at startup ---")
-    
+
     # --- Pre-load all ML models for performance optimization ---
     logger.info("Initializing model registry for performance optimization...")
     await model_registry.initialize_models()
-    logger.info("Model registry initialized - eliminating per-request model loading overhead")
+    logger.info(
+        "Model registry initialized - eliminating per-request model loading overhead"
+    )
 
     # --- Use Redis for persistent, shareable state ---
     async with AsyncRedisSaver.from_conn_string(
@@ -164,7 +173,10 @@ async def lifespan(app: FastAPI):
         workflow.add_conditional_edges(
             "safety_check",
             route_after_safety_check,
-            {"store_cache": "store_cache", "enter_grounding_correction": "enter_grounding_correction"},
+            {
+                "store_cache": "store_cache",
+                "enter_grounding_correction": "enter_grounding_correction",
+            },
         )
         workflow.add_conditional_edges(
             "enter_grounding_correction",
@@ -264,7 +276,10 @@ async def get_cache_stats():
 async def clear_cache():
     """Clear all cache entries."""
     success = await semantic_cache.clear_cache()
-    return {"success": success, "message": "Cache cleared" if success else "Failed to clear cache"}
+    return {
+        "success": success,
+        "message": "Cache cleared" if success else "Failed to clear cache",
+    }
 
 
 @app.get("/config/hnsw")
@@ -283,3 +298,103 @@ def get_hnsw_config():
 def get_model_config():
     """Get current model registry configuration and status."""
     return model_registry.get_model_info()
+
+
+# --- SEMANTIC CACHE TESTING ENDPOINTS (Remove before deploying to production) ---
+
+
+@app.post("/cache/test/create-entry")
+async def create_test_cache_entry(request: CacheEntryRequest):
+    """
+    Create a cache entry for testing purposes.
+
+    This endpoint allows you to directly cache a query-answer pair
+    without executing the entire graph workflow.
+    """
+    return await semantic_cache_tester.create_cache_entry(
+        query=request.query, answer=request.answer, metadata=request.metadata
+    )
+
+
+@app.post("/cache/test/similarity", response_model=SimilarityTestResponse)
+async def test_query_similarity(request: SimilarityTestRequest):
+    """
+    Test similarity between two queries using all available similarity methods.
+
+    This endpoint compares a cached query with a test query using:
+    - Vector similarity (if cached query exists in vector store)
+    - Embedding similarity
+    - Cross-encoder similarity
+    - Lexical similarity
+
+    It also predicts whether the test query would get a cache hit.
+    """
+    return await semantic_cache_tester.test_query_similarity(
+        cached_query=request.cached_query, test_query=request.test_query
+    )
+
+
+@app.post("/cache/test/retrieval", response_model=CacheTestResponse)
+async def test_cache_retrieval(query: str = None, request: Request = None):
+    """
+    Test cache retrieval for a given query.
+
+    This endpoint tests whether a query would get a cache hit
+    using the same logic as the actual workflow, without executing
+    the full graph.
+
+    Query can be provided either as a query parameter or in the request body.
+    """
+    # Try to get query from query parameters first
+    if not query and request:
+        query = request.query_params.get("query")
+
+    # If still no query, try to get from request body
+    if not query and request:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                query = body.get("query")
+            elif isinstance(body, str):
+                query = body
+        except Exception as e:
+            logger.error(f"Failed to parse request body: {e}")
+            pass
+
+    if not query:
+        raise HTTPException(status_code=400, detail="Query parameter is required")
+
+    return await semantic_cache_tester.test_cache_retrieval(query)
+
+
+@app.post("/cache/test/bulk-similarity")
+async def bulk_similarity_test(cached_query: str, test_queries: list[str]):
+    """
+    Test similarity between one cached query and multiple test queries.
+
+    This endpoint is useful for testing how a cached query performs
+    against multiple variations or related queries.
+    """
+    return await semantic_cache_tester.bulk_similarity_test(cached_query, test_queries)
+
+
+@app.get("/cache/test/stats")
+async def get_cache_test_stats():
+    """
+    Get comprehensive cache statistics including testing framework information.
+
+    This endpoint provides detailed cache statistics and information about
+    the testing framework capabilities.
+    """
+    return await semantic_cache_tester.get_cache_statistics()
+
+
+@app.post("/cache/test/clear")
+async def clear_cache_for_testing():
+    """
+    Clear the cache for testing purposes.
+
+    This endpoint clears all cache entries to start fresh testing.
+    Use with caution as this affects the actual cache used by the system.
+    """
+    return await semantic_cache_tester.clear_cache_for_testing()
