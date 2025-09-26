@@ -21,9 +21,9 @@ import sys
 import os
 
 # Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from agentic_rag.app.semantic_cache_tester import semantic_cache_tester
+from semantic_cache_tester import semantic_cache_tester
 
 
 async def demo_cache_testing():

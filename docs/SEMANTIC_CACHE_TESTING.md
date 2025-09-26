@@ -149,7 +149,7 @@ The testing framework uses a cross-encoder based approach that completely elimin
 ### Command Line Demo
 ```bash
 # Run the comprehensive demo
-python semantic_cache_test_demo.py
+python tests/semantic_cache_test_demo.py
 ```
 
 ### Programmatic Usage

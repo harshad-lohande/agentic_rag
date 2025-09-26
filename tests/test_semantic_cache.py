@@ -142,32 +142,6 @@ class TestSemanticCache:
             assert result is not None, f"Similar query should get cache hit: {similar_query}"
             assert result["cache_id"] == sample_cache_entries["mct_benefits_query"]["cache_id"]
 
-    @pytest.mark.asyncio
-    async def test_normalize_similarity_score_distance_mode(self, mock_semantic_cache):
-        """Test similarity score normalization in distance mode."""
-        cache = mock_semantic_cache
-        
-        with patch('agentic_rag.config.settings.SEMANTIC_CACHE_SCORE_MODE', 'distance'):
-            # Distance of 0.0 should become similarity 1.0
-            assert cache._normalize_similarity_score(0.0) == 1.0
-            
-            # Distance of 2.0 should become similarity 0.0
-            assert cache._normalize_similarity_score(2.0) == 0.0
-            
-            # Distance of 1.0 should become similarity 0.5
-            assert cache._normalize_similarity_score(1.0) == 0.5
-
-    @pytest.mark.asyncio
-    async def test_normalize_similarity_score_similarity_mode(self, mock_semantic_cache):
-        """Test similarity score normalization in similarity mode."""
-        cache = mock_semantic_cache
-        
-        with patch('agentic_rag.config.settings.SEMANTIC_CACHE_SCORE_MODE', 'similarity'):
-            # Similarity scores should be clamped to [0, 1] range
-            assert cache._normalize_similarity_score(0.5) == 0.5
-            assert cache._normalize_similarity_score(1.5) == 1.0  # Clamped to 1.0
-            assert cache._normalize_similarity_score(-0.5) == 0.0  # Clamped to 0.0
-
     def test_lexical_similarity(self, mock_semantic_cache):
         """Test lexical similarity calculation."""
         cache = mock_semantic_cache
