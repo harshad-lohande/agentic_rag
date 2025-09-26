@@ -42,7 +42,7 @@ from agentic_rag.config import settings
 from agentic_rag.app.middlewares import RequestIDMiddleware
 from agentic_rag.app.semantic_cache import semantic_cache
 from agentic_rag.app.model_registry import model_registry
-from agentic_rag.app.semantic_cache_tester import (
+from agentic_rag.testing.semantic_cache_tester import (
     semantic_cache_tester, 
     CacheEntryRequest, 
     SimilarityTestRequest, 
@@ -292,7 +292,7 @@ def get_model_config():
     return model_registry.get_model_info()
 
 
-# ===== SEMANTIC CACHE TESTING ENDPOINTS =====
+# --- SEMANTIC CACHE TESTING ENDPOINTS (Remove before deploying to production) ---
 
 @app.post("/cache/test/create-entry")
 async def create_test_cache_entry(request: CacheEntryRequest):

@@ -424,6 +424,8 @@ class SemanticCache:
             # The similarity_score from cross-encoder search is already the cross-encoder similarity
             ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
             lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
+            lex_high = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_HIGH", 0.4))
+            ce_sim_thresh = float(getattr(settings, "SEMANTIC_CACHE_SIMILARITY_THRESHOLD", 0.85))
 
             accept = False
             reason = ""
@@ -434,7 +436,7 @@ class SemanticCache:
 
             # Simplified rules using only reliable similarity measures
             # Rule 1: High cross-encoder similarity (most reliable semantic measure)
-            if ce_sim >= 0.85:
+            if ce_sim >= ce_sim_thresh:
                 accept = True
                 reason = f"high cross-encoder similarity (ce={ce_sim:.3f})"
             # Rule 2: Good cross-encoder with lexical support
@@ -442,7 +444,7 @@ class SemanticCache:
                 accept = True
                 reason = f"cross-encoder & lexical support (ce={ce_sim:.3f}, lex={lex:.2f})"
             # Rule 3: Very high lexical similarity (likely paraphrases)
-            elif lex >= 0.4:
+            elif lex >= lex_high:
                 accept = True
                 reason = f"high lexical similarity (lex={lex:.2f})"
 
@@ -472,7 +474,7 @@ class SemanticCache:
 
             # Alias only on very high-confidence hits to avoid poisoning
             try:
-                if ce_sim >= 0.90:  # Very high cross-encoder similarity
+                if ce_sim >= float(getattr(settings, "SEMANTIC_CE_SIM_HIGH", 0.90)):  # Very high cross-encoder similarity
                     qh = self._generate_query_hash(query)
                     exact_key = f"exact_match:{qh}"
                     ttl = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
@@ -590,7 +592,7 @@ class SemanticCache:
     async def _find_highly_similar_entries(self, query: str) -> List[Tuple[str, float]]:
         """
         For the store path, be conservative to avoid wrong merges.
-        Uses cross-encoder similarity instead of unreliable vector similarity.
+        Uses cross-encoder similarity.
         """
         try:
             similar_docs = await self._cross_encoder_similarity_search(query, k=1)
@@ -604,17 +606,19 @@ class SemanticCache:
                 return out
 
             # Use cross-encoder similarity thresholds (more reliable)
+            ce_sim_thresh = float(getattr(settings, "SEMANTIC_CACHE_SIMILARITY_THRESHOLD", 0.85))
             ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
+            lex_mod = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MODERATE", 0.30))
 
             accept = False
             # For storage, be more conservative - require high cross-encoder similarity
-            if score >= 0.80:  # High similarity threshold for merging entries
+            if score >= ce_sim_thresh:
                 accept = True
             elif score >= ce_min:
                 # For moderate similarity, also check lexical overlap
                 cached_query = doc.page_content or ""
                 lex_sim = self._lexical_similarity(query, cached_query)
-                if lex_sim >= 0.3:  # Require some lexical overlap for merging
+                if lex_sim >= lex_mod:  # Require some lexical overlap for merging
                     accept = True
 
             if accept:

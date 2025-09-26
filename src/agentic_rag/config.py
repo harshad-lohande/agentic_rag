@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     # --- Semantic Caching Configuration ---
     ENABLE_SEMANTIC_CACHE: bool = True
-    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.95
+    SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.85
     SEMANTIC_CACHE_TTL: int = 3600  # Cache TTL in seconds
     SEMANTIC_CACHE_MAX_SIZE: int = 1000  # Maximum number of cached queries
     SEMANTIC_CACHE_INDEX_NAME: str = "SemanticCache"
@@ -106,7 +106,10 @@ class Settings(BaseSettings):
 
     # Robust semantic hit acceptance (tunable)
     SEMANTIC_CACHE_CE_ACCEPT: float = 0.60          # cross-encoder accept
+    SEMANTIC_CE_SIM_HIGH: float = 0.90              # high cross-encoder support when needed
     SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15        # tiny lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.4       # high lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_MODERATE: float = 0.30    # lexical support for moderate similarity
 
 
 
