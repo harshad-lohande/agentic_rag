@@ -48,7 +48,7 @@ def chunk_text(
         else:
             try:
                 logger.info("--- Using SemanticChunker for text chunking ---")
-                
+
                 embeddings = (
                     embedding_model
                     if embedding_model

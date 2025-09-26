@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     FAST_COMPRESSION_MODEL: str = "all-MiniLM-L6-v2"
 
     # --- Performance optimization settings ---
-    ENABLE_FAST_COMPRESSION: bool = True  # Use fast extractive compression instead of LLM-based
+    ENABLE_FAST_COMPRESSION: bool = (
+        True  # Use fast extractive compression instead of LLM-based
+    )
     ENABLE_MODEL_PRELOADING: bool = True  # Pre-load models at startup
-    ENABLE_OPTIMIZED_WORKFLOW: bool = True  # Use streamlined workflow without correction loops
+    ENABLE_OPTIMIZED_WORKFLOW: bool = (
+        True  # Use streamlined workflow without correction loops
+    )
 
     # --- Compression LLM (open-source) ---
     COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
@@ -87,11 +91,11 @@ class Settings(BaseSettings):
     # efConstruction: Higher values create more accurate index (build-time)
     # Recommended range: 64-512, higher for better accuracy/slower builds
     HNSW_EF_CONSTRUCTION: int = 256
-    
+
     # ef: Query-time search parameter (runtime)
     # Recommended range: 16-256, higher for better accuracy/slower queries
     HNSW_EF: int = 64
-    
+
     # maxConnections: Max connections per node in HNSW graph
     # Recommended range: 16-64, higher for better recall/more memory
     HNSW_MAX_CONNECTIONS: int = 32
@@ -105,12 +109,13 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_GC_INTERVAL: int = 3600  # Garbage collection interval in seconds
 
     # Robust semantic hit acceptance (tunable)
-    SEMANTIC_CACHE_CE_ACCEPT: float = 0.60          # cross-encoder accept
-    SEMANTIC_CE_SIM_HIGH: float = 0.90              # high cross-encoder support when needed
-    SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15        # tiny lexical support when needed
-    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.4       # high lexical support when needed
-    SEMANTIC_CACHE_LEXICAL_MODERATE: float = 0.30    # lexical support for moderate similarity
-
+    SEMANTIC_CACHE_CE_ACCEPT: float = 0.60  # cross-encoder accept
+    SEMANTIC_CE_SIM_HIGH: float = 0.90  # high cross-encoder support when needed
+    SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15  # tiny lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.4  # high lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_MODERATE: float = (
+        0.30  # lexical support for moderate similarity
+    )
 
 
 settings = Settings()

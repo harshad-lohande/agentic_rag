@@ -18,12 +18,14 @@ async def main():
 
     try:
         cache = get_semantic_cache()
-        
+
         # This will initialize the cache and its clients if not already done
         is_initialized = await cache._initialize_clients()
 
         if not is_initialized:
-            console.print("[bold red]❌ Failed to initialize semantic cache. Aborting GC.[/bold red]")
+            console.print(
+                "[bold red]❌ Failed to initialize semantic cache. Aborting GC.[/bold red]"
+            )
             return
 
         console.print("✅ Cache initialized. Starting garbage collection process...")
@@ -32,9 +34,13 @@ async def main():
         cleaned_count = await cache.run_garbage_collection_manually()
 
         if cleaned_count > 0:
-            console.print(f"[bold green]✅ Garbage collection complete. Cleaned up {cleaned_count} orphan entries.[/bold green]")
+            console.print(
+                f"[bold green]✅ Garbage collection complete. Cleaned up {cleaned_count} orphan entries.[/bold green]"
+            )
         else:
-            console.print("[bold green]✅ Garbage collection complete. No orphan entries were found.[/bold green]")
+            console.print(
+                "[bold green]✅ Garbage collection complete. No orphan entries were found.[/bold green]"
+            )
 
     except Exception as e:
         console.print(f"❌ [bold red]An unexpected error occurred: {e}[/bold red]")

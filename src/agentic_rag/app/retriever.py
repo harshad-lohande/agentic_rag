@@ -29,7 +29,9 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
     embedding_model = model_registry.get_embedding_model()
     if embedding_model is None:
         # Fallback to on-demand loading if registry not initialized
-        logger.warning("Model registry not initialized, loading embedding model on-demand")
+        logger.warning(
+            "Model registry not initialized, loading embedding model on-demand"
+        )
         embedding_model = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
     else:
         logger.debug("Using pre-loaded embedding model from registry")
@@ -40,7 +42,7 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
         index_name=settings.INDEX_NAME,
         embedding_model=embedding_model,
         text_key="text",
-        enable_hnsw_optimization=False  # Don't recreate during retrieval
+        enable_hnsw_optimization=False,  # Don't recreate during retrieval
     )
 
     # 3. Create and return the retriever
