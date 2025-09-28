@@ -1,8 +1,13 @@
 # src/agentic_rag/app/api.py
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Security, status
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
+from typing import Annotated
+import uuid
+import secrets
+
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage
 from agentic_rag.app.agentic_workflow import (
@@ -36,7 +41,6 @@ from agentic_rag.app.agentic_workflow import (
     compress_documents,
 )
 from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-import uuid
 from agentic_rag.logging_config import setup_logging, logger
 from agentic_rag.config import settings
 from agentic_rag.app.middlewares import RequestIDMiddleware
@@ -52,6 +56,31 @@ from agentic_rag.testing.semantic_cache_tester import (
 
 # --- Setup Logging ---
 setup_logging()
+
+
+# --- Authentication ---
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def get_api_key(api_key_header: Annotated[str | None, Security(API_KEY_HEADER)]) -> str:
+    """Validate X-API-Key header."""
+    expected = settings.APP_ENDPOINT_API_KEY
+    if not expected:
+        logger.warning("APP_ENDPOINT_API_KEY not set; rejecting request (set it in .env)")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key not configured",
+        )
+    if not api_key_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API key",
+        )
+    if not secrets.compare_digest(api_key_header, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+    return "ok"  # do not return the actual key
 
 
 @asynccontextmanager
@@ -235,7 +264,7 @@ class QueryResponse(BaseModel):
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_endpoint(request: QueryRequest):
+async def query_endpoint(request: QueryRequest, api_key: Annotated[str, Depends(get_api_key)]):
     """Receives a query and returns a grounded answer using the LangGraph workflow."""
     langgraph_app = app.state.langgraph_app
     session_id = request.session_id or str(uuid.uuid4())

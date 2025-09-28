@@ -1,13 +1,22 @@
 # src/agentic_rag/config.py
 
+import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
 
+from agentic_rag.aws import get_secrets
+
+logger = logging.getLogger(__name__)
+
 
 class Settings(BaseSettings):
+    # Allow loading from a .env file for local development
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    # --- RAG Application Settings ---
+    APP_ENDPOINT_API_KEY: str = ""
 
     # --- Retrieval -> Rerank -> Compression knobs ---
     RETRIEVAL_CANDIDATES_K: int = 10  # initial recall before rerank/compress
@@ -117,5 +126,42 @@ class Settings(BaseSettings):
         0.30  # lexical support for moderate similarity
     )
 
+    # --- Settings for cloud environment ---
+    APP_ENVIRONMENT: Literal["development", "production"] = "development"
+    AWS_SECRET_NAME: str = "agentic-rag/api_keys"
+    AWS_REGION: str = "us-east-1" # Or your preferred region
 
-settings = Settings()
+
+def load_settings() -> Settings:
+    """
+    Loads the application settings.
+
+    In a 'production' environment, it fetches secrets from AWS Secrets Manager.
+    Otherwise, it falls back to loading from environment variables / .env file.
+    """
+    # First, load the base settings which will read APP_ENVIRONMENT from the env
+    base_settings = Settings()
+
+    if base_settings.APP_ENVIRONMENT == "production":
+        logger.info("Production environment detected. Loading secrets from AWS Secrets Manager.")
+        try:
+            # Fetch the secrets dictionary from AWS
+            aws_secrets = get_secrets(
+                secret_name=base_settings.AWS_SECRET_NAME,
+                region_name=base_settings.AWS_REGION
+            )
+            # Create a new Settings instance, overriding values with those from AWS
+            # Any setting not in AWS will keep its default or value from the environment
+            return Settings(**aws_secrets)
+        except ValueError as e:
+            logger.critical(f"Failed to load settings from AWS: {e}")
+            # In a real production system, you might want the app to fail to start
+            # if secrets can't be loaded.
+            raise
+    else:
+        logger.info("Development environment detected. Loading settings from .env file.")
+        # In a development environment, return the settings loaded from the .env file
+        return base_settings
+
+# Create a single, globally accessible settings object
+settings = load_settings()

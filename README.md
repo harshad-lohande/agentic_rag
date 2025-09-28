@@ -19,6 +19,18 @@ It persistently checkpoints conversational state in Redis, supports multi-provid
 
 Since the initial version, we’ve added a number of robustness, quality, and deployment improvements:
 
+- **Production-Grade API Security**
+  - The /query endpoint is now secured, requiring clients to provide a secret token in the X-API-Key header
+  - This prevents unauthorized use and protects against denial-of-wallet attacks by stopping expensive LLM and ML model computations from unknown sources.
+  - To protect more endpoints, add the dependency at the router or app level, or add api_key: Annotated[str, Depends(get_api_key)] to each route you want secured (e.g., cache manipulation endpoints). 
+  - The Streamlit UI has been configured to securely manage and transmit this key, ensuring secure server-to-server communication.
+
+- **Cloud-Ready & Environment-Aware Configuration**
+  - The entire application is now fully parameterized, removing all hardcoded connection details for services like Weaviate, Redis, and Ollama.
+  - A new conditional configuration system allows the application to run seamlessly in different environments. It detects an APP_ENVIRONMENT variable to switch between:
+    - development: Loads all settings from a local .env file for easy setup.
+    - production: Uses the boto3 library to fetch secrets and API keys directly from **AWS Secrets Manager**, a secure and scalable cloud practice.
+
 - **Document-level de-duplication across the pipeline**
   - Content-first unique key using a normalized content hash with sensible fallbacks (source + chunk_number, or explicit id). Prevents redundant snippets from inflating context windows and RRF fusion scores.
 
