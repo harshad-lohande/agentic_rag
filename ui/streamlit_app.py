@@ -1,54 +1,118 @@
 # ui/streamlit_app.py
 
-import streamlit as st
+import uuid
+
 import requests
-import sys
-import os
+import streamlit as st
 
-# Add the project's 'src' directory to the Python path
-# This is necessary for the logging.ini to find the custom formatter
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-src_path = os.path.join(project_root, "src")
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-from agentic_rag.logging_config import setup_logging
+from agentic_rag.logging_config import setup_logging, logger
 
 # --- Setup Logging ---
 setup_logging()
 
+# --- Configuration ---
+BACKEND_URL = "http://localhost:8000/query"
+# Securely access the API key from Streamlit's secrets manager
+API_KEY = st.secrets.get("ENDPOINT_AUTH_API_KEY")
+
+# --- Streamlit UI Setup ---
 st.set_page_config(page_title="Agentic RAG System", layout="wide")
-st.title("📄 Agentic RAG System")
+st.title("Autonomous Agentic RAG System 🤖")
 
-# Initialize session_id in Streamlit's session state
+# Initialize session state for session_id and messages
 if "session_id" not in st.session_state:
-    st.session_state.session_id = None
+    st.session_state.session_id = str(uuid.uuid4())
+    logger.info(f"New session created with ID: {st.session_state.session_id}")
 
-# Input box for the user query
-query = st.text_input("Ask a question about your documents:", "")
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-if query:
-    payload = {"query": query, "session_id": st.session_state.session_id}
+
+# --- Helper Functions ---
+def display_chat_history():
+    """Displays the chat history."""
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+def query_backend(query: str, session_id: str) -> str:
+    """
+    Call backend and return answer string (never None).
+    UI rendering happens in caller.
+    """
+    if not API_KEY:
+        msg = "Backend API Key not configured. Set AUTH_API_KEY in .streamlit/secrets.toml"
+        logger.error(msg)
+        return msg
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,  # or Authorization: Bearer <API_KEY> if backend changed
+    }
+    payload = {"query": query, "session_id": session_id}
+
     try:
         with st.spinner("Thinking..."):
-            # Call the FastAPI backend
-            response = requests.post("http://localhost:8000/query", json=payload)
-            response.raise_for_status()  # Raise an exception for bad status codes
+            resp = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=120)
+            status_code = resp.status_code
+            if status_code != 200:
+                # Try to extract backend error detail
+                try:
+                    detail = resp.json().get("detail", resp.text)
+                except Exception:
+                    detail = resp.text
+                logger.error(f"Backend HTTP {status_code}: {detail}")
+                return f"Sorry, backend error ({status_code})."
 
-            result = response.json()
+            try:
+                data = resp.json()
+            except Exception as e:
+                logger.error(f"JSON parse error: {e}")
+                return "Sorry, invalid backend JSON."
 
-            st.session_state.session_id = result["session_id"]
+            # Update session id if backend returns one
+            if "session_id" in data:
+                st.session_state.session_id = data["session_id"]
 
-            st.success("Answer:")
-            st.write(result["answer"])
+            # Prefer 'answer', fall back
+            answer = data.get("answer") or data.get("response") or data.get("cached_answer")
+            if not answer:
+                logger.warning(f"No answer field in payload keys={list(data.keys())}")
+                return "Sorry, backend returned no answer."
 
-            # Display token usage in an expander
-            with st.expander("Show Token Usage"):
-                st.write(f"Prompt Tokens: {result['prompt_tokens']}")
-                st.write(f"Completion Tokens: {result['completion_tokens']}")
-                st.write(f"Total Tokens: {result['total_tokens']}")
+            # Store token stats for later display (optional)
+            st.session_state.last_token_usage = {
+                "prompt": data.get("prompt_tokens"),
+                "completion": data.get("completion_tokens"),
+                "total": data.get("total_tokens"),
+            }
+            return answer
 
     except requests.exceptions.RequestException as e:
-        st.error(f"Failed to connect to the backend API: {e}")
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+        logger.error(f"Request exception: {e}")
+        return "Sorry, could not reach backend."
+
+
+# --- Main Application Logic ---
+display_chat_history()
+
+if prompt := st.chat_input("Ask me anything about your documents..."):
+    # Add and display user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Get assistant answer
+    answer_text = query_backend(prompt, st.session_state.session_id)
+
+    # Add assistant answer to history
+    st.session_state.messages.append({"role": "assistant", "content": answer_text})
+    with st.chat_message("assistant"):
+        st.markdown(answer_text)
+        # Show token usage if available
+        tu = st.session_state.get("last_token_usage")
+        if tu and any(v is not None for v in tu.values()):
+            with st.expander("Token Usage"):
+                st.write(f"Prompt: {tu.get('prompt')}")
+                st.write(f"Completion: {tu.get('completion')}")
+                st.write(f"Total: {tu.get('total')}")
