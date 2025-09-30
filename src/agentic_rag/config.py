@@ -17,20 +17,29 @@ class Settings(BaseSettings):
 
     # --- RAG Application Settings ---
     APP_ENDPOINT_API_KEY: str = ""
+    BACKEND_URL: str = "http://localhost:8000/query"
+    USE_RECENT_HISTORY_IN_REWRITE: bool = True
+
 
     # --- Retrieval -> Rerank -> Compression knobs ---
     RETRIEVAL_CANDIDATES_K: int = 10  # initial recall before rerank/compress
     RERANK_TOP_K: int = 3  # keep top-N after rerank
+    RETRIEVER_BALANCE: float = 0.5  # balance between vector and keyword search
 
-    # --- Contextual compression ---
+    # --- Contextual compression settings ---
     ENABLE_CONTEXTUAL_COMPRESSION: bool = True
     COMPRESSION_MAX_TOKENS: int = 200
     COMPRESSION_OVERLAP_TOKENS: int = 30
     COMPRESSION_REDUNDANCY_SIM: float = 0.95
-    # Dedicated fast compression SentenceTransformer (singleton)
-    FAST_COMPRESSION_MODEL: str = "all-MiniLM-L6-v2"
+    COMPRESSION_LLM_MODEL: str = "llama3.1:8b"  # for provider="ollama"
+    COMPRESSION_MODEL_TEMP: float = 0.2
+    COMPRESSION_MODEL_CONTEXT_SIZE: int = 4096
+    COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
+        "ollama"
+    )
+    HF_COMPRESSION_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
 
-    # --- Performance optimization settings ---
+    # --- Fast compression settings ---
     ENABLE_FAST_COMPRESSION: bool = (
         True  # Use fast extractive compression instead of LLM-based
     )
@@ -38,17 +47,15 @@ class Settings(BaseSettings):
     ENABLE_OPTIMIZED_WORKFLOW: bool = (
         True  # Use streamlined workflow without correction loops
     )
+    # Dedicated fast compression SentenceTransformer (singleton)
+    FAST_COMPRESSION_MODEL: str = "all-MiniLM-L6-v2"
+    FAST_COMPRESSION_MAX_SENTENCES: int = 5
 
-    # --- Compression LLM (open-source) ---
-    COMPRESSION_LLM_PROVIDER: Literal["hf_endpoint", "ollama", "openai", "google"] = (
-        "ollama"
-    )
-    HF_COMPRESSION_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    # --- Huggingface Settings ---
     HUGGINGFACEHUB_API_TOKEN: str = ""
 
     # --- Optional Ollama alternative (if you run an Ollama server) ---
     OLLAMA_HOST: str = "http://localhost:11434"
-    COMPRESSION_LLM_MODEL: str = "llama3.1:8b"  # for provider="ollama"
 
     # --- Chunking Settings ---
     CHUNKING_STRATEGY: Literal["recursive", "semantic"] = "semantic"
@@ -61,20 +68,21 @@ class Settings(BaseSettings):
     # --- Redis Setting ---
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
+    REDIS_MAX_CONNECTIONS: int = 20
 
     # --- Provider Settings ---
     LLM_PROVIDER: Literal["openai", "google"] = "openai"
 
-    # --- Ingestion settings from Phase 1 ---
+    # --- Ingestion Settings ---
     WEAVIATE_HOST: str = "localhost"
     WEAVIATE_PORT: int = 8080
     # EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"
     # EMBEDDING_MODEL: str = "mixedbread-ai/mxbai-embed-large-v1"
     EMBEDDING_MODEL: str = "intfloat/e5-large-v2"
-    INDEX_NAME: str = "AgenticRAG"
+    WEAVIATE_STORAGE_INDEX_NAME: str = "AgenticRAG"
     DATA_TO_INDEX: str = "data"
 
-    # --- Settings from Phase 1 ---
+    # --- OpenAI Settings ---
     OPENAI_MAIN_MODEL_NAME: str = "gpt-4.1-mini"
     OPENAI_FAST_MODEL_NAME: str = "gpt-4.1-nano"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -85,6 +93,9 @@ class Settings(BaseSettings):
     GOOGLE_FAST_MODEL_NAME: str = "gemini-2.5-flash-lite"
     GOOGLE_EMBEDDING_MODEL: str = "models/text-embedding-004"
     GOOGLE_API_KEY: str = ""
+
+    # Model temperature for LLM providers (other than compression)
+    MODEL_TEMP: float = 0.7
 
     LANGCHAIN_TRACING_V2: str = "true"
     LANGCHAIN_API_KEY: str = ""
@@ -121,7 +132,7 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_CE_ACCEPT: float = 0.60  # cross-encoder accept
     SEMANTIC_CE_SIM_HIGH: float = 0.90  # high cross-encoder support when needed
     SEMANTIC_CACHE_LEXICAL_MIN: float = 0.15  # tiny lexical support when needed
-    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.4  # high lexical support when needed
+    SEMANTIC_CACHE_LEXICAL_HIGH: float = 0.7  # high lexical support when needed
     SEMANTIC_CACHE_LEXICAL_MODERATE: float = (
         0.30  # lexical support for moderate similarity
     )

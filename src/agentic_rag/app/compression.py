@@ -18,33 +18,28 @@ from agentic_rag.app.hf_chat import HFChatInference
 from agentic_rag.app.model_registry import model_registry
 
 # OPTIONAL: centralize the numeric cap
-COMPRESSION_MAX_NEW_TOKENS = int(
-    getattr(settings, "COMPRESSION_MAX_TOKENS", 200) or 200
-)
+COMPRESSION_MAX_NEW_TOKENS = settings.COMPRESSION_MAX_TOKENS
 
 
 def _resolve_hf_token() -> Optional[str]:
     return (
-        getattr(settings, "HF_API_TOKEN", None)
-        or getattr(settings, "HUGGINGFACEHUB_API_TOKEN", None)
+        settings.HUGGINGFACEHUB_API_TOKEN
         or None
     )
 
 
 def get_compression_llm():
-    prov = getattr(settings, "COMPRESSION_LLM_PROVIDER", "hf_endpoint")
+    prov = settings.COMPRESSION_LLM_PROVIDER
 
     if prov in ("hf_endpoint", "hf_chat"):
         logger.info(
-            f"--- Using HuggingFace LLM for compression: {getattr(settings, 'HF_COMPRESSION_MODEL', 'mistralai/Mistral-7B-Instruct-v0.3')} ---"
+            f"--- Using HuggingFace LLM for compression: {settings.HF_COMPRESSION_MODEL} ---"
         )
         try:
             return HFChatInference(
-                model=getattr(
-                    settings, "HF_COMPRESSION_MODEL", "Qwen/Qwen2.5-14B-Instruct"
-                ),
+                model=settings.HF_COMPRESSION_MODEL,
                 token=_resolve_hf_token(),
-                temperature=0.2,
+                temperature=settings.COMPRESSION_MODEL_TEMP,
                 max_tokens=COMPRESSION_MAX_NEW_TOKENS,
             )
         except Exception as e:
@@ -55,17 +50,17 @@ def get_compression_llm():
 
     elif prov == "ollama":
         logger.info(
-            f"--- Using Ollama LLM for compression: {getattr(settings, 'COMPRESSION_LLM_MODEL', 'llama3.1:8b')} ---"
+            f"--- Using Ollama LLM for compression: {settings.COMPRESSION_LLM_MODEL} ---"
         )
         try:
             from langchain_ollama import ChatOllama
         except Exception:
             from langchain_community.chat_models import ChatOllama  # fallback
         return ChatOllama(
-            base_url=getattr(settings, "OLLAMA_HOST", "http://localhost:11434"),
-            model=getattr(settings, "COMPRESSION_LLM_MODEL", "qwen2.5:14b"),
-            temperature=0.2,
-            num_ctx=4096,
+            base_url=settings.OLLAMA_HOST,
+            model=settings.COMPRESSION_LLM_MODEL,
+            temperature=settings.COMPRESSION_MODEL_TEMP,
+            num_ctx=settings.COMPRESSION_MODEL_CONTEXT_SIZE,
             num_predict=COMPRESSION_MAX_NEW_TOKENS,  # Hard limit: max new tokens per compressed snippet
         )
 
@@ -80,13 +75,13 @@ def get_compression_llm():
 
         if prov == "openai":
             logger.info(
-                f"--- Using OpenAI LLM for compression: {getattr(settings, 'OPENAI_FAST_MODEL_NAME', 'gpt-4.1-nano')} ---"
+                f"--- Using OpenAI LLM for compression: {settings.OPENAI_FAST_MODEL_NAME} ---"
             )
             llm.max_tokens = COMPRESSION_MAX_NEW_TOKENS
             return llm
         elif prov == "google":
             logger.info(
-                f"--- Using Google Gemini LLM for compression: {getattr(settings, 'GOOGLE_FAST_MODEL_NAME', 'gemini-2.5-flash-lite')} ---"
+                f"--- Using Google Gemini LLM for compression: {settings.GOOGLE_FAST_MODEL_NAME} ---"
             )
             llm.max_output_tokens = COMPRESSION_MAX_NEW_TOKENS
             return llm
@@ -113,12 +108,12 @@ def build_document_compressor() -> DocumentCompressorPipeline:
     if embeddings is None:
         # Fallback to on-demand loading if registry not initialized
         logger.warning(
-            "⚠️ Model registry not initialized for compression, loading embedding model on-demand"
+            "Model registry not initialized for compression, loading embedding model on-demand"
         )
         embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
     else:
         logger.debug(
-            "✅ Document compressor using pre-loaded embedding model from registry"
+            "Document compressor using pre-loaded embedding model from registry"
         )
 
     redundant_filter = EmbeddingsRedundantFilter(

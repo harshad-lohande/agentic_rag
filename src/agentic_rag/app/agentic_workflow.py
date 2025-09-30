@@ -599,9 +599,7 @@ def transform_query(state: GraphState) -> dict:
         recent_history = ""
 
     # Feature toggle: allow disabling this extra context if needed (defaults to True)
-    use_recent_in_rewrite = bool(
-        getattr(settings, "USE_RECENT_HISTORY_IN_REWRITE", True)
-    )
+    use_recent_in_rewrite = settings.USE_RECENT_HISTORY_IN_REWRITE
     history_for_prompt = recent_history if use_recent_in_rewrite else ""
 
     # Build the prompt and call LLM
@@ -728,7 +726,7 @@ def grade_and_rerank_documents(state: GraphState) -> dict:
     scored_docs = list(zip(documents, scores))
     scored_docs.sort(key=lambda x: x[1], reverse=True)
     # Keep a few for compression to work with
-    keep_n = max(1, getattr(settings, "RERANK_TOP_K", 3))
+    keep_n = max(1, settings.RERANK_TOP_K)
     reranked_docs = [doc for doc, score in scored_docs[:keep_n]]
 
     retrieval_success = bool(reranked_docs)
@@ -757,7 +755,7 @@ def compress_documents(state: GraphState) -> dict:
         return {"documents": [], "retrieval_success": False}
 
     # Use fast compression if enabled for performance optimization
-    if getattr(settings, "ENABLE_FAST_COMPRESSION", True):
+    if settings.ENABLE_FAST_COMPRESSION:
         logger.info("Using fast extractive compression for performance optimization")
         compressed_docs = fast_compress_documents(docs, query)
         compressed_docs = deduplicate_documents(compressed_docs)

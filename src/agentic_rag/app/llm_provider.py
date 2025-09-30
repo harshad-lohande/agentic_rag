@@ -23,7 +23,7 @@ def get_llm(fast_model: bool = False):
         return ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=settings.GOOGLE_API_KEY,
-            temperature=0.7,
+            temperature=settings.MODEL_TEMP,
         )
     elif provider == "openai":
         model_name = (
@@ -34,7 +34,7 @@ def get_llm(fast_model: bool = False):
         return ChatOpenAI(
             model_name=model_name,
             openai_api_key=settings.OPENAI_API_KEY,
-            temperature=0.7,
+            temperature=settings.MODEL_TEMP,
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")

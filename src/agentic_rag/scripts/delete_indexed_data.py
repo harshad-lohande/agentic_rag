@@ -15,7 +15,7 @@ def clear_weaviate_index():
             host=settings.WEAVIATE_HOST, port=settings.WEAVIATE_PORT
         )
 
-        index_name = settings.INDEX_NAME
+        index_name = settings.WEAVIATE_STORAGE_INDEX_NAME
 
         # Check if the collection exists before trying to delete
         if client.collections.exists(index_name):

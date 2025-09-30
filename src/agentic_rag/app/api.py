@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
 
     # --- Use Redis for persistent, shareable state ---
     async with AsyncRedisSaver.from_conn_string(
-        f"redis://{settings.REDIS_HOST}:6379"
+        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}",
     ) as checkpointer:
         # await checkpointer.asetup()
 

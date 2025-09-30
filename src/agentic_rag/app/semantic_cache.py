@@ -92,14 +92,6 @@ class SemanticCache:
         except Exception:
             return -1.0
 
-    def _embedding_similarity(self, text1: str, text2: str) -> float:
-        """
-        DEPRECATED: Cosine similarity of query embeddings in [0,1].
-        This method has been deprecated due to unreliable results.
-        The semantic cache now uses only cross-encoder and lexical similarity.
-        """
-        logger.warning("_embedding_similarity is deprecated and should not be used")
-        return 0.0
 
     async def _initialize_clients(self):
         """Lazy initialization of Redis and Weaviate clients for caching."""
@@ -114,9 +106,9 @@ class SemanticCache:
                 # Initialize async Redis client
                 if AIOREDIS_AVAILABLE:
                     self.redis_client = aioredis.from_url(
-                        f"redis://{settings.REDIS_HOST}:6379",
+                        f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}",
                         decode_responses=True,
-                        max_connections=20,
+                        max_connections=settings.REDIS_MAX_CONNECTIONS,
                         retry_on_timeout=True,
                     )
                     await self.redis_client.ping()
@@ -124,9 +116,9 @@ class SemanticCache:
                     # Fallback to sync Redis for backward compatibility
                     self.redis_client = redis.Redis(
                         host=settings.REDIS_HOST,
-                        port=6379,
+                        port=settings.REDIS_PORT,
                         decode_responses=True,
-                        max_connections=20,
+                        max_connections=settings.REDIS_MAX_CONNECTIONS,
                     )
                     self.redis_client.ping()
 
@@ -151,23 +143,9 @@ class SemanticCache:
                 await self._cleanup_failed_init()
                 return False
 
-    def _normalize_similarity_score(self, score: float | None) -> float | None:
-        """
-        DEPRECATED: Normalize backend score to similarity in [0,1].
-
-        This method was used to normalize vector similarity scores from Weaviate,
-        but vector similarity has been replaced with cross-encoder similarity
-        which doesn't require normalization.
-        """
-        logger.warning(
-            "_normalize_similarity_score is deprecated - vector similarity has been replaced with cross-encoder similarity"
-        )
-        return score
-
     async def _cross_encoder_similarity_search(self, query: str, k: int = 1):
         """
-        REPLACEMENT for vector similarity search using cross-encoder similarity.
-        This is more reliable than vector similarity which was consistently giving wrong scores.
+        Similarity search using cross-encoder similarity.
 
         Args:
             query: Query to find similar cached entries for
@@ -449,12 +427,10 @@ class SemanticCache:
             # Use configured thresholds for similarity validation
             # SIMPLIFIED APPROACH: Use only cross-encoder and lexical similarity
             # The similarity_score from cross-encoder search is already the cross-encoder similarity
-            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
-            lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
-            lex_high = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_HIGH", 0.4))
-            ce_sim_thresh = float(
-                getattr(settings, "SEMANTIC_CACHE_SIMILARITY_THRESHOLD", 0.85)
-            )
+            ce_min = settings.SEMANTIC_CACHE_CE_ACCEPT
+            lex_min = settings.SEMANTIC_CACHE_LEXICAL_MIN
+            lex_high = settings.SEMANTIC_CACHE_LEXICAL_HIGH
+            ce_sim_thresh = settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD
 
             accept = False
             reason = ""
@@ -511,12 +487,10 @@ class SemanticCache:
 
             # Alias only on very high-confidence hits to avoid poisoning
             try:
-                if ce_sim >= float(
-                    getattr(settings, "SEMANTIC_CE_SIM_HIGH", 0.90)
-                ):  # Very high cross-encoder similarity
+                if ce_sim >= settings.SEMANTIC_CE_SIM_HIGH:  # Very high cross-encoder similarity
                     qh = self._generate_query_hash(query)
                     exact_key = f"exact_match:{qh}"
-                    ttl = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+                    ttl = settings.SEMANTIC_CACHE_TTL
                     if AIOREDIS_AVAILABLE:
                         await self.redis_client.setex(exact_key, ttl, cache_id)
                     else:
@@ -659,11 +633,9 @@ class SemanticCache:
                 return out
 
             # Use cross-encoder similarity thresholds (more reliable)
-            ce_sim_thresh = float(
-                getattr(settings, "SEMANTIC_CACHE_SIMILARITY_THRESHOLD", 0.85)
-            )
-            ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
-            lex_mod = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MODERATE", 0.30))
+            ce_sim_thresh = settings.SEMANTIC_CACHE_SIMILARITY_THRESHOLD
+            ce_min = settings.SEMANTIC_CACHE_CE_ACCEPT
+            lex_mod = settings.SEMANTIC_CACHE_LEXICAL_MODERATE
 
             accept = False
             # For storage, be more conservative - require high cross-encoder similarity
@@ -703,7 +675,7 @@ class SemanticCache:
         upsert a fresh entry for the current query and clean up the orphaned vector.
         """
         try:
-            ttl_seconds = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+            ttl_seconds = settings.SEMANTIC_CACHE_TTL
             existing_entry = await self._get_cache_entry_by_id(cache_id)
 
             if not existing_entry:
@@ -793,7 +765,7 @@ class SemanticCache:
         Create a fresh cache entry and vector doc (used by upsert fallback when update fails).
         """
         try:
-            ttl_seconds = int(getattr(settings, "SEMANTIC_CACHE_TTL", 3600))
+            ttl_seconds = settings.SEMANTIC_CACHE_TTL
             cache_id = str(uuid.uuid4())
             doc_id = str(uuid.uuid4())
             created_ts = int(time.time())
@@ -945,9 +917,7 @@ class SemanticCache:
 
     async def _background_gc_loop(self):
         """Background garbage collection loop."""
-        gc_interval = getattr(
-            settings, "SEMANTIC_CACHE_GC_INTERVAL", 3600
-        )  # 1 hour default
+        gc_interval = settings.SEMANTIC_CACHE_GC_INTERVAL  # 1 hour default
 
         while self._initialized and not (
             self._shutdown_event and self._shutdown_event.is_set()

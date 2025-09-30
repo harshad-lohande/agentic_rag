@@ -39,7 +39,7 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
     # 2. Instantiate the Vector Store object with HNSW optimization
     vector_store = create_weaviate_vector_store(
         client=client,
-        index_name=settings.INDEX_NAME,
+        index_name=settings.WEAVIATE_STORAGE_INDEX_NAME,
         embedding_model=embedding_model,
         text_key="text",
         enable_hnsw_optimization=False,  # Don't recreate during retrieval
@@ -48,10 +48,8 @@ def create_retriever() -> Tuple[VectorStoreRetriever, weaviate.Client]:
     # 3. Create and return the retriever
     retriever = vector_store.as_retriever(
         search_kwargs={
-            "k": getattr(
-                settings, "RETRIEVAL_CANDIDATES_K", 20
-            ),  # Number of documents to retrieve
-            "alpha": 0.5,  # Balance between vector and keyword search (0 = keyword, 1 = vector)
+            "k": settings.RETRIEVAL_CANDIDATES_K,  # Number of documents to retrieve
+            "alpha": settings.RETRIEVER_BALANCE,  # Balance between vector and keyword search (0 = keyword, 1 = vector)
         }
     )
 
