@@ -19,9 +19,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 def chunk_text(
     text: str,
-    chunk_size: int = getattr(settings, "CHUNK_SIZE", 500),
-    chunk_overlap: int = getattr(settings, "CHUNK_OVERLAP", 50),
-    strategy: Optional[Literal["recursive", "semantic"]] = None,
+    chunk_size: int = settings.CHUNK_SIZE,
+    chunk_overlap: int = settings.CHUNK_OVERLAP,
+    strategy: Optional[Literal["recursive", "semantic"]] = settings.CHUNKING_STRATEGY,
     embedding_model: Optional[Embeddings] = None,
 ) -> List[str]:
     """
@@ -38,7 +38,7 @@ def chunk_text(
     if not isinstance(text, str):
         raise ValueError("Input text must be a string.")
 
-    chosen = strategy or getattr(settings, "CHUNKING_STRATEGY", "recursive")
+    chosen = strategy
 
     if chosen == "semantic":
         if SemanticChunker is None:
@@ -57,12 +57,8 @@ def chunk_text(
 
                 splitter = SemanticChunker(
                     embeddings=embeddings,
-                    breakpoint_threshold_type=getattr(
-                        settings, "SEMANTIC_BREAKPOINT_TYPE", "percentile"
-                    ),
-                    breakpoint_threshold_amount=float(
-                        getattr(settings, "SEMANTIC_BREAKPOINT_AMOUNT", 95.0)
-                    ),
+                    breakpoint_threshold_type=settings.SEMANTIC_BREAKPOINT_TYPE,
+                    breakpoint_threshold_amount=settings.SEMANTIC_BREAKPOINT_AMOUNT,
                     buffer_size=chunk_overlap,
                     add_start_index=True,
                 )

@@ -120,7 +120,7 @@ def run_hnsw_parameter_benchmark() -> Dict[str, Any]:
         )
 
         # Check if main collection exists
-        collection_name = settings.INDEX_NAME
+        collection_name = settings.WEAVIATE_STORAGE_INDEX_NAME
         if not client.collections.exists(collection_name):
             logger.error(
                 f"Collection '{collection_name}' does not exist. Run ingestion first."

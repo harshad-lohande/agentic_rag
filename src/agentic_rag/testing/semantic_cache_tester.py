@@ -228,8 +228,8 @@ class SemanticCacheTester:
         # Import settings to get current thresholds
         from agentic_rag.config import settings
 
-        ce_min = float(getattr(settings, "SEMANTIC_CACHE_CE_ACCEPT", 0.60))
-        lex_min = float(getattr(settings, "SEMANTIC_CACHE_LEXICAL_MIN", 0.15))
+        ce_min = settings.SEMANTIC_CACHE_CE_ACCEPT
+        lex_min = settings.SEMANTIC_CACHE_LEXICAL_MIN
 
         if ce_sim is None:
             return False, "No cross-encoder similarity available"

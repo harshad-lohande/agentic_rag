@@ -44,7 +44,7 @@ class FastExtractiveDocs:
                 return self._sentence_transformer
 
             # On-demand fallback: use the configured embedding model (not a different default)
-            model_name = getattr(settings, "FAST_COMPRESSION_MODEL", "all-MiniLM-L6-v2")
+            model_name = settings.FAST_COMPRESSION_MODEL
             logger.debug(
                 f"Loading SentenceTransformer on-demand for compression: {model_name}"
             )
@@ -57,7 +57,7 @@ class FastExtractiveDocs:
         return self._sentence_transformer
 
     def compress_documents(
-        self, documents: List[Document], query: str, max_sentences: int = 15
+        self, documents: List[Document], query: str, max_sentences: int = settings.FAST_COMPRESSION_MAX_SENTENCES
     ) -> List[Document]:
         """
         Fast extractive compression using sentence-level similarity.
@@ -113,11 +113,11 @@ class FastExtractiveDocs:
             total_original = sum(len(doc.page_content) for doc in documents)
             total_compressed = sum(len(doc.page_content) for doc in compressed_docs)
             compression_ratio = (
-                total_compressed / total_original if total_original > 0 else 1.0
+                (1 - total_compressed / total_original) if total_original > 0 else 1.0
             )
 
             logger.info(
-                f"Fast compression complete: {compression_ratio:.2%} of original size retained"
+                f"Fast compression complete: {compression_ratio:.2%} of original size compressed"
             )
             return compressed_docs
 

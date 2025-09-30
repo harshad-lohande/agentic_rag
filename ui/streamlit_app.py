@@ -6,12 +6,14 @@ import requests
 import streamlit as st
 
 from agentic_rag.logging_config import setup_logging, logger
+from agentic_rag.config import settings
 
 # --- Setup Logging ---
 setup_logging()
 
 # --- Configuration ---
-BACKEND_URL = "http://localhost:8000/query"
+BACKEND_URL = settings.BACKEND_URL
+
 # Securely access the API key from Streamlit's secrets manager
 API_KEY = st.secrets.get("ENDPOINT_AUTH_API_KEY")
 

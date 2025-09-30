@@ -31,7 +31,7 @@ def ingest_documents():
         WEAVIATE_HOST = settings.WEAVIATE_HOST
         WEAVIATE_PORT = settings.WEAVIATE_PORT
         EMBEDDING_MODEL = settings.EMBEDDING_MODEL
-        INDEX_NAME = settings.INDEX_NAME
+        INDEX_NAME = settings.WEAVIATE_STORAGE_INDEX_NAME
 
         logger.info(f"Data directory is set to: {DATA_DIR}")
 

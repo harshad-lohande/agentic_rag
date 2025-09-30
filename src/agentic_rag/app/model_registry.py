@@ -142,11 +142,7 @@ class ModelRegistry:
                 "sentence-transformers not available; cross-encoder guard disabled"
             )
             return None
-        model_name = getattr(
-            settings,
-            "CROSS_ENCODER_MODEL_SMALL",
-            "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        )
+        model_name = settings.CROSS_ENCODER_MODEL_SMALL
         logger.info(f"Loading guard cross-encoder (ST) on-demand: {model_name}")
         ce = await asyncio.to_thread(_STCrossEncoder, model_name)
         self._models["cross_encoder_guard"] = ce
@@ -207,12 +203,8 @@ class ModelRegistry:
         """Get information about loaded models."""
         return {
             "embedding_model": settings.EMBEDDING_MODEL,
-            "cross_encoder_small": getattr(
-                settings, "CROSS_ENCODER_MODEL_SMALL", "Not configured"
-            ),
-            "cross_encoder_large": getattr(
-                settings, "CROSS_ENCODER_MODEL_LARGE", "Not configured"
-            ),
+            "cross_encoder_small": settings.CROSS_ENCODER_MODEL_SMALL,
+            "cross_encoder_large": settings.CROSS_ENCODER_MODEL_LARGE,
             "initialized": str(self._initialized),
             "loaded_models": list(self._models.keys()),
         }
