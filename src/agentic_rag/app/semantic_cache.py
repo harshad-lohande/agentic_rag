@@ -157,10 +157,10 @@ class SemanticCache:
         try:
             # Get all cached entry IDs from the sorted set index
             if AIOREDIS_AVAILABLE:
-                cache_ids = await self.redis_client.zrange("cache_index", 0, -1)
+                cache_ids = await self.redis_client.zrange(settings.REDIS_ZSET_KEY, 0, -1)
             else:
                 cache_ids = await asyncio.to_thread(
-                    self.redis_client.zrange, "cache_index", 0, -1
+                    self.redis_client.zrange, settings.REDIS_ZSET_KEY, 0, -1
                 )
 
             if not cache_ids:
@@ -276,7 +276,7 @@ class SemanticCache:
 
     def _generate_cache_key(self, cache_id: str) -> str:
         """Generate Redis key for cache entry."""
-        return f"cache_entry:{cache_id}"
+        return f"{settings.REDIS_ENTRY_PREFIX}{cache_id}"
 
     async def _is_cache_enabled(self) -> bool:
         """Check if semantic caching is enabled and properly initialized."""
@@ -387,7 +387,7 @@ class SemanticCache:
         try:
             # 1. Check for an exact query match first.
             query_hash = self._generate_query_hash(query)
-            exact_match_key = f"exact_match:{query_hash}"
+            exact_match_key = f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}"
 
             cache_id = None
             if AIOREDIS_AVAILABLE:
@@ -489,7 +489,7 @@ class SemanticCache:
             try:
                 if ce_sim >= settings.SEMANTIC_CE_SIM_HIGH:  # Very high cross-encoder similarity
                     qh = self._generate_query_hash(query)
-                    exact_key = f"exact_match:{qh}"
+                    exact_key = f"{settings.REDIS_EXACT_MATCH_PREFIX}{qh}"
                     ttl = settings.SEMANTIC_CACHE_TTL
                     if AIOREDIS_AVAILABLE:
                         await self.redis_client.setex(exact_key, ttl, cache_id)
@@ -579,7 +579,7 @@ class SemanticCache:
         try:
             # 1. Check for an exact query match first for deduplication
             query_hash = self._generate_query_hash(query)
-            exact_match_key = f"exact_match:{query_hash}"
+            exact_match_key = f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}"
 
             existing_cache_id = None
             if AIOREDIS_AVAILABLE:
@@ -717,12 +717,12 @@ class SemanticCache:
                 # refresh ZSET score to keep hot entries
                 try:
                     await self.redis_client.zadd(
-                        "cache_index", {"%s" % cache_id: int(time.time())}
+                        settings.REDIS_ZSET_KEY, {"%s" % cache_id: int(time.time())}
                     )
                 except TypeError:
                     # some clients expect (key, score, member)
                     await self.redis_client.zadd(
-                        "cache_index", int(time.time()), cache_id
+                        settings.REDIS_ZSET_KEY, int(time.time()), cache_id
                     )
             else:
                 await asyncio.to_thread(
@@ -731,20 +731,20 @@ class SemanticCache:
                 try:
                     await asyncio.to_thread(
                         self.redis_client.zadd,
-                        "cache_index",
+                        settings.REDIS_ZSET_KEY,
                         {cache_id: int(time.time())},
                     )
                 except TypeError:
                     await asyncio.to_thread(
                         self.redis_client.zadd,
-                        "cache_index",
+                        settings.REDIS_ZSET_KEY,
                         int(time.time()),
                         cache_id,
                     )
 
             # Ensure exact-match mapping is set for this query
             qhash = self._generate_query_hash(query)
-            exact_key = f"exact_match:{qhash}"
+            exact_key = f"{settings.REDIS_EXACT_MATCH_PREFIX}{qhash}"
             if AIOREDIS_AVAILABLE:
                 await self.redis_client.setex(exact_key, ttl_seconds, cache_id)
             else:
@@ -786,19 +786,19 @@ class SemanticCache:
             cache_key = self._generate_cache_key(cache_id)
             await self._execute_lua_script(
                 "add_cache_entry",
-                keys=[cache_key, "cache_index"],
+                keys=[cache_key, settings.REDIS_ZSET_KEY],
                 args=[cache_id, json.dumps(entry), str(ttl_seconds), str(created_ts)],
             )
 
             # exact match mapping
             if AIOREDIS_AVAILABLE:
                 await self.redis_client.setex(
-                    f"exact_match:{query_hash}", ttl_seconds, cache_id
+                    f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}", ttl_seconds, cache_id
                 )
             else:
                 await asyncio.to_thread(
                     self.redis_client.setex,
-                    f"exact_match:{query_hash}",
+                    f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}",
                     ttl_seconds,
                     cache_id,
                 )
@@ -829,7 +829,7 @@ class SemanticCache:
     async def _manage_cache_size_atomic(self):
         """Atomically manage cache size using Lua script for O(log N) performance."""
         try:
-            index_key = "cache_index"
+            index_key = settings.REDIS_ZSET_KEY
             evicted_cache_ids = await self._execute_lua_script(
                 "trim_cache",
                 keys=[index_key],
@@ -940,7 +940,7 @@ class SemanticCache:
             logger.info("Running garbage collection for semantic cache")
 
             # Part 1: Clean up stale entries from the Redis cache_index
-            index_key = "cache_index"
+            index_key = settings.REDIS_ZSET_KEY
             if AIOREDIS_AVAILABLE:
                 all_indexed_ids = await self.redis_client.zrange(index_key, 0, -1)
             else:
@@ -1084,9 +1084,9 @@ class SemanticCache:
 
         try:
             # Use efficient Lua script for stats
-            index_key = "cache_index"
+            index_key = settings.REDIS_ZSET_KEY
             stats_result = await self._execute_lua_script(
-                "get_cache_stats", keys=[index_key], args=["cache_entry:*"]
+                "get_cache_stats", keys=[index_key], args=[settings.REDIS_ENTRY_PREFIX_PATTERN]
             )
 
             total_entries, sample_cache_ids = stats_result
@@ -1150,7 +1150,7 @@ class SemanticCache:
             return False
 
         try:
-            index_key = "cache_index"
+            index_key = settings.REDIS_ZSET_KEY
             if AIOREDIS_AVAILABLE:
                 all_cache_ids = await self.redis_client.zrange(index_key, 0, -1)
             else:
@@ -1204,7 +1204,7 @@ class SemanticCache:
                 logger.debug(f"Redis MEMORY PURGE not available: {e}")
 
             logger.info(
-                f"✅ Cleared {len(all_cache_ids)} cache entries (Redis + Weaviate)"
+                f"Cleared {len(all_cache_ids)} cache entries (Redis + Weaviate)"
             )
             return True
 
@@ -1215,7 +1215,7 @@ class SemanticCache:
     async def _get_exact_match_keys(self) -> List[str]:
         """Get all exact match keys for cleanup."""
         try:
-            pattern = "exact_match:*"
+            pattern = settings.REDIS_SCAN_PATTERN
             if AIOREDIS_AVAILABLE:
                 # Use scan for production-safe key iteration
                 keys = []

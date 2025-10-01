@@ -137,6 +137,13 @@ class Settings(BaseSettings):
         0.30  # lexical support for moderate similarity
     )
 
+    # Redis keys and patterns
+    REDIS_ZSET_KEY: str = "cache_index"
+    REDIS_ENTRY_PREFIX: str = "cache_entry:"
+    REDIS_ENTRY_PREFIX_PATTERN: str = "cache_entry:*"
+    REDIS_EXACT_MATCH_PREFIX: str = "exact_match:"
+    REDIS_SCAN_PATTERN: str = "exact_match:*"
+
     # --- Settings for cloud environment ---
     APP_ENVIRONMENT: Literal["development", "production"] = "development"
     AWS_SECRET_NAME: str = "agentic-rag/api_keys"
