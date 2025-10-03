@@ -4,7 +4,9 @@ import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Literal
 
-from agentic_rag.aws import get_secrets
+# Import from both cloud modules
+from agentic_rag.aws import get_secrets as get_aws_secrets
+from agentic_rag.gcp import get_secrets as get_gcp_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,8 @@ class Settings(BaseSettings):
     APP_ENDPOINT_API_KEY: str = ""
     BACKEND_URL: str = "http://localhost:8000/query"
     USE_RECENT_HISTORY_IN_REWRITE: bool = True
+    APP_ENVIRONMENT: Literal["development", "production"] = "development"
+    CLOUD_PROVIDER: Literal["aws", "gcp", "none"] = "none"
 
 
     # --- Retrieval -> Rerank -> Compression knobs ---
@@ -144,41 +148,48 @@ class Settings(BaseSettings):
     REDIS_EXACT_MATCH_PREFIX: str = "exact_match:"
     REDIS_SCAN_PATTERN: str = "exact_match:*"
 
-    # --- Settings for cloud environment ---
-    APP_ENVIRONMENT: Literal["development", "production"] = "development"
+    # --- AWS Specific Settings ---
     AWS_SECRET_NAME: str = "agentic-rag/api_keys"
     AWS_REGION: str = "us-east-1" # Or your preferred region
+
+    # --- GCP Specific Settings ---
+    GCP_PROJECT_ID: str = "agentic-rag-system-473914"
+    GCP_SECRET_ID: str = "api-keys"
 
 
 def load_settings() -> Settings:
     """
-    Loads the application settings.
-
-    In a 'production' environment, it fetches secrets from AWS Secrets Manager.
-    Otherwise, it falls back to loading from environment variables / .env file.
+    Loads settings, fetching from a cloud provider in a production environment.
     """
-    # First, load the base settings which will read APP_ENVIRONMENT from the env
     base_settings = Settings()
 
     if base_settings.APP_ENVIRONMENT == "production":
-        logger.info("Production environment detected. Loading secrets from AWS Secrets Manager.")
+        cloud_provider = base_settings.CLOUD_PROVIDER
+        logger.info(f"Production environment detected. Using cloud provider: {cloud_provider}")
+
+        secrets = {}
         try:
-            # Fetch the secrets dictionary from AWS
-            aws_secrets = get_secrets(
-                secret_name=base_settings.AWS_SECRET_NAME,
-                region_name=base_settings.AWS_REGION
-            )
-            # Create a new Settings instance, overriding values with those from AWS
-            # Any setting not in AWS will keep its default or value from the environment
-            return Settings(**aws_secrets)
+            if cloud_provider == "aws":
+                secrets = get_aws_secrets(
+                    secret_name=base_settings.AWS_SECRET_NAME,
+                    region_name=base_settings.AWS_REGION,
+                )
+            elif cloud_provider == "gcp":
+                secrets = get_gcp_secrets(
+                    project_id=base_settings.GCP_PROJECT_ID,
+                    secret_id=base_settings.GCP_SECRET_ID,
+                )
+            else:
+                logger.warning("Running in production mode without a specified cloud provider. Using default settings.")
+                return base_settings
+
+            return Settings(**secrets)
+
         except ValueError as e:
-            logger.critical(f"Failed to load settings from AWS: {e}")
-            # In a real production system, you might want the app to fail to start
-            # if secrets can't be loaded.
+            logger.critical(f"Failed to load settings from {cloud_provider}: {e}")
             raise
     else:
         logger.info("Development environment detected. Loading settings from .env file.")
-        # In a development environment, return the settings loaded from the .env file
         return base_settings
 
 # Create a single, globally accessible settings object
