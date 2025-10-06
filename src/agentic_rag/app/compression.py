@@ -22,10 +22,7 @@ COMPRESSION_MAX_NEW_TOKENS = settings.COMPRESSION_MAX_TOKENS
 
 
 def _resolve_hf_token() -> Optional[str]:
-    return (
-        settings.HUGGINGFACEHUB_API_TOKEN
-        or None
-    )
+    return settings.HUGGINGFACEHUB_API_TOKEN or None
 
 
 def get_compression_llm():

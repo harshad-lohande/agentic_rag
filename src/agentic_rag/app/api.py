@@ -61,11 +61,14 @@ setup_logging()
 # --- Authentication ---
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
+
 def get_api_key(api_key_header: Annotated[str | None, Security(API_KEY_HEADER)]) -> str:
     """Validate X-API-Key header."""
     expected = settings.APP_ENDPOINT_API_KEY
     if not expected:
-        logger.warning("APP_ENDPOINT_API_KEY not set; rejecting request (set it in .env)")
+        logger.warning(
+            "APP_ENDPOINT_API_KEY not set; rejecting request (set it in .env)"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key not configured",
@@ -264,7 +267,9 @@ class QueryResponse(BaseModel):
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_endpoint(request: QueryRequest, api_key: Annotated[str, Depends(get_api_key)]):
+async def query_endpoint(
+    request: QueryRequest, api_key: Annotated[str, Depends(get_api_key)]
+):
     """Receives a query and returns a grounded answer using the LangGraph workflow."""
     langgraph_app = app.state.langgraph_app
     session_id = request.session_id or str(uuid.uuid4())

@@ -57,7 +57,10 @@ class FastExtractiveDocs:
         return self._sentence_transformer
 
     def compress_documents(
-        self, documents: List[Document], query: str, max_sentences: int = settings.FAST_COMPRESSION_MAX_SENTENCES
+        self,
+        documents: List[Document],
+        query: str,
+        max_sentences: int = settings.FAST_COMPRESSION_MAX_SENTENCES,
     ) -> List[Document]:
         """
         Fast extractive compression using sentence-level similarity.

@@ -1,7 +1,15 @@
 # src/agentic_rag/app/ingestion.py
 
 import os
+import tempfile
+from urllib.parse import urlparse
 import weaviate
+
+# Optional: only needed for S3 ingestion
+try:
+    import boto3
+except ImportError:
+    boto3 = None
 
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -16,43 +24,42 @@ from agentic_rag.config import settings
 from agentic_rag.logging_config import logger
 
 
+def _is_s3_uri(path: str) -> bool:
+    try:
+        p = urlparse(path)
+        return p.scheme == "s3" and bool(p.netloc)
+    except Exception:
+        return False
+
+
+def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
+    # s3://bucket/prefix -> (bucket, prefix)
+    p = urlparse(s3_uri)
+    return p.netloc, p.path.lstrip("/")
+
+
 def ingest_documents():
     """
-    Orchestrates the ingestion pipeline in a memory-efficient way:
-    1. Streams document content chunk by chunk.
-    2. Parses and further chunks the text.
-    3. Creates embeddings and stores them in Weaviate.
+    Orchestrates the ingestion pipeline:
+    - production + aws + s3://... -> stream S3 objects one-by-one via a temp file, process, then delete
+    - development + none -> read from local directory
     """
     logger.info("Starting the ingestion process...")
 
     try:
-        # Define constants
-        DATA_DIR = settings.DATA_TO_INDEX
+        DATA_SOURCE = settings.DATA_TO_INDEX
         WEAVIATE_HOST = settings.WEAVIATE_HOST
         WEAVIATE_PORT = settings.WEAVIATE_PORT
         EMBEDDING_MODEL = settings.EMBEDDING_MODEL
         INDEX_NAME = settings.WEAVIATE_STORAGE_INDEX_NAME
 
-        logger.info(f"Data directory is set to: {DATA_DIR}")
+        logger.info(f"Data source: {DATA_SOURCE}")
 
-        # Initialize the components
+        # Initialize components
         parser = DocumentParser()
         logger.info("DocumentParser initialized.")
-
         embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
         logger.info("Embedding model loaded.")
-
-        file_paths = [
-            os.path.join(DATA_DIR, f)
-            for f in os.listdir(DATA_DIR)
-            if os.path.isfile(os.path.join(DATA_DIR, f))
-        ]
-
-        if not file_paths:
-            logger.warning("No files found in the data directory. Aborting.")
-            return
-
-        logger.info(f"Found {len(file_paths)} documents to ingest.")
 
         # Connect to Weaviate
         logger.info("Connecting to Weaviate...")
@@ -64,7 +71,7 @@ def ingest_documents():
             logger.info("Setting up semantic cache collection...")
             create_semantic_cache_collection(client)
 
-        # Instantiate the Vector Store object with HNSW optimization
+        # Vector store
         vector_store = create_weaviate_vector_store(
             client=client,
             index_name=INDEX_NAME,
@@ -73,39 +80,101 @@ def ingest_documents():
             enable_hnsw_optimization=True,
         )
 
-        total_chunks_indexed = 0
-        for file_path in file_paths:
+        def _process_file(file_path: str) -> int:
+            """
+            Core processing: parse -> chunk -> add_documents
+            """
             try:
-                logger.info(f"Processing {file_path}...")
-
                 doc_generator = parser.parse(file_path)
-
-                all_chunks_for_file = []
+                docs = []
                 for parsed_data in doc_generator:
                     chunks = chunk_text(
                         text=parsed_data["text"], embedding_model=embedding_model
                     )
-
                     for i, chunk in enumerate(chunks):
-                        doc = Document(
-                            page_content=chunk,
-                            metadata={
-                                "source": parsed_data["metadata"]["file_name"],
-                                "chunk_number": i + 1,
-                                **parsed_data["metadata"],
-                            },
+                        docs.append(
+                            Document(
+                                page_content=chunk,
+                                metadata={
+                                    "source": parsed_data["metadata"]["file_name"],
+                                    "chunk_number": i + 1,
+                                    **parsed_data["metadata"],
+                                },
+                            )
                         )
-                        all_chunks_for_file.append(doc)
-
-                if all_chunks_for_file:
-                    vector_store.add_documents(all_chunks_for_file, by_text=False)
-                    logger.info(
-                        f"Indexed {len(all_chunks_for_file)} chunks from {file_path}"
-                    )
-                    total_chunks_indexed += len(all_chunks_for_file)
-
+                if docs:
+                    vector_store.add_documents(docs, by_text=False)
+                    logger.info(f"Indexed {len(docs)} chunks from {file_path}")
+                    return len(docs)
+                return 0
             except Exception as e:
                 logger.error(f"Failed to process {file_path}: {e}")
+                return 0
+
+        total_chunks_indexed = 0
+
+        use_s3 = (
+            settings.APP_ENVIRONMENT == "production"
+            and settings.CLOUD_PROVIDER == "aws"
+            and _is_s3_uri(DATA_SOURCE)
+        )
+
+        if use_s3:
+            if boto3 is None:
+                logger.error("boto3 not installed; cannot ingest from S3. Aborting.")
+                return
+
+            bucket, prefix = _parse_s3_uri(DATA_SOURCE)
+            logger.info(
+                f"Ingesting from S3 bucket='{bucket}' prefix='{prefix or '(root)'}'"
+            )
+
+            s3 = boto3.client("s3")
+            paginator = s3.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+
+            files_found = 0
+            with tempfile.TemporaryDirectory(prefix="ingest_s3_") as tmpdir:
+                for page in pages:
+                    for obj in page.get("Contents", []):
+                        key = obj.get("Key")
+                        if not key or key.endswith("/"):
+                            continue
+                        base = os.path.basename(key) or "object"
+                        staged_path = os.path.join(tmpdir, base)
+                        try:
+                            s3.download_file(bucket, key, staged_path)
+                            files_found += 1
+                            total_chunks_indexed += _process_file(staged_path)
+                        finally:
+                            try:
+                                if os.path.exists(staged_path):
+                                    os.remove(staged_path)
+                            except Exception:
+                                pass
+
+            if files_found == 0:
+                logger.warning(
+                    "No files found under the specified S3 prefix. Aborting."
+                )
+                return
+        else:
+            # Local directory mode
+            data_dir = DATA_SOURCE
+            if not os.path.isdir(data_dir):
+                logger.warning(f"Local data directory does not exist: {data_dir}")
+                return
+            file_paths = [
+                os.path.join(data_dir, f)
+                for f in os.listdir(data_dir)
+                if os.path.isfile(os.path.join(data_dir, f))
+            ]
+            if not file_paths:
+                logger.warning("No files found in the data directory. Aborting.")
+                return
+            logger.info(f"Found {len(file_paths)} documents to ingest.")
+            for fp in file_paths:
+                total_chunks_indexed += _process_file(fp)
 
         if total_chunks_indexed > 0:
             logger.info("--- Ingestion Complete ---")

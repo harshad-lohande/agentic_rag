@@ -24,7 +24,9 @@ def _safe_hnsw_config(**kwargs):
     try:
         return Configure.VectorIndex.hnsw(**filtered)
     except Exception as e:
-        logger.error(f"HNSW config creation failed with filtered params ({filtered.keys()}): {e}")
+        logger.error(
+            f"HNSW config creation failed with filtered params ({filtered.keys()}): {e}"
+        )
         # Minimal fallback
         return Configure.VectorIndex.hnsw(
             distance_metric=VectorDistances.COSINE,
@@ -50,7 +52,9 @@ def create_weaviate_vector_store(
             text_key=text_key,
             embedding=embedding_model,
         )
-        logger.info(f"Created Weaviate vector store for index '{index_name}' (HNSW optimization={enable_hnsw_optimization})")
+        logger.info(
+            f"Created Weaviate vector store for index '{index_name}' (HNSW optimization={enable_hnsw_optimization})"
+        )
         return vector_store
     except Exception as e:
         logger.error(f"Error creating Weaviate vector store: {e}")
@@ -60,7 +64,9 @@ def create_weaviate_vector_store(
 def _configure_hnsw_collection(client: weaviate.Client, collection_name: str):
     try:
         if client.collections.exists(collection_name):
-            logger.info(f"Collection '{collection_name}' already exists; skipping creation.")
+            logger.info(
+                f"Collection '{collection_name}' already exists; skipping creation."
+            )
             return
 
         logger.info(f"Creating collection '{collection_name}' with HNSW optimization")
@@ -109,7 +115,9 @@ def _configure_hnsw_collection(client: weaviate.Client, collection_name: str):
         logger.info(f"Successfully created collection '{collection_name}'")
     except Exception as e:
         logger.error(f"Error configuring HNSW collection '{collection_name}': {e}")
-        logger.warning("Falling back to default Weaviate configuration (no custom HNSW params)")
+        logger.warning(
+            "Falling back to default Weaviate configuration (no custom HNSW params)"
+        )
 
 
 def create_semantic_cache_collection(client: weaviate.Client) -> bool:
@@ -166,7 +174,9 @@ def create_semantic_cache_collection(client: weaviate.Client) -> bool:
             ],
         )
 
-        logger.info(f"Successfully created semantic cache collection '{collection_name}'")
+        logger.info(
+            f"Successfully created semantic cache collection '{collection_name}'"
+        )
         return True
     except Exception as e:
         logger.error(f"Error creating semantic cache collection: {e}")
