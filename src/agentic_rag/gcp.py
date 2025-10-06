@@ -9,6 +9,7 @@ from google.api_core import exceptions as gcp_exceptions
 
 logger = logging.getLogger(__name__)
 
+
 @lru_cache(maxsize=1)
 def get_secrets(project_id: str, secret_id: str, version_id: str = "latest") -> dict:
     """
@@ -49,5 +50,7 @@ def get_secrets(project_id: str, secret_id: str, version_id: str = "latest") -> 
         logger.error(f"Failed to parse JSON from secret '{secret_id}'.")
         raise ValueError(f"The secret value for '{secret_id}' is not valid JSON.")
     except Exception as e:
-        logger.error(f"An unexpected error occurred while fetching secret '{secret_id}': {e}")
+        logger.error(
+            f"An unexpected error occurred while fetching secret '{secret_id}': {e}"
+        )
         raise ValueError(f"An unexpected error occurred: {e}")

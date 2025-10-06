@@ -92,7 +92,6 @@ class SemanticCache:
         except Exception:
             return -1.0
 
-
     async def _initialize_clients(self):
         """Lazy initialization of Redis and Weaviate clients for caching."""
         if self._initialized:
@@ -157,7 +156,9 @@ class SemanticCache:
         try:
             # Get all cached entry IDs from the sorted set index
             if AIOREDIS_AVAILABLE:
-                cache_ids = await self.redis_client.zrange(settings.REDIS_ZSET_KEY, 0, -1)
+                cache_ids = await self.redis_client.zrange(
+                    settings.REDIS_ZSET_KEY, 0, -1
+                )
             else:
                 cache_ids = await asyncio.to_thread(
                     self.redis_client.zrange, settings.REDIS_ZSET_KEY, 0, -1
@@ -487,7 +488,9 @@ class SemanticCache:
 
             # Alias only on very high-confidence hits to avoid poisoning
             try:
-                if ce_sim >= settings.SEMANTIC_CE_SIM_HIGH:  # Very high cross-encoder similarity
+                if (
+                    ce_sim >= settings.SEMANTIC_CE_SIM_HIGH
+                ):  # Very high cross-encoder similarity
                     qh = self._generate_query_hash(query)
                     exact_key = f"{settings.REDIS_EXACT_MATCH_PREFIX}{qh}"
                     ttl = settings.SEMANTIC_CACHE_TTL
@@ -793,7 +796,9 @@ class SemanticCache:
             # exact match mapping
             if AIOREDIS_AVAILABLE:
                 await self.redis_client.setex(
-                    f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}", ttl_seconds, cache_id
+                    f"{settings.REDIS_EXACT_MATCH_PREFIX}{query_hash}",
+                    ttl_seconds,
+                    cache_id,
                 )
             else:
                 await asyncio.to_thread(
@@ -1086,7 +1091,9 @@ class SemanticCache:
             # Use efficient Lua script for stats
             index_key = settings.REDIS_ZSET_KEY
             stats_result = await self._execute_lua_script(
-                "get_cache_stats", keys=[index_key], args=[settings.REDIS_ENTRY_PREFIX_PATTERN]
+                "get_cache_stats",
+                keys=[index_key],
+                args=[settings.REDIS_ENTRY_PREFIX_PATTERN],
             )
 
             total_entries, sample_cache_ids = stats_result
