@@ -21,9 +21,8 @@ class Settings(BaseSettings):
     APP_ENDPOINT_API_KEY: str = ""
     BACKEND_URL: str = "http://localhost:8000/query"
     USE_RECENT_HISTORY_IN_REWRITE: bool = True
-    APP_ENVIRONMENT: Literal["development", "production"] = "development"
-    CLOUD_PROVIDER: Literal["aws", "gcp", "none"] = "none"
-
+    APP_ENVIRONMENT: Literal["development", "production"] = "production"
+    CLOUD_PROVIDER: Literal["aws", "gcp", "none"] = "aws"
 
     # --- Retrieval -> Rerank -> Compression knobs ---
     RETRIEVAL_CANDIDATES_K: int = 10  # initial recall before rerank/compress
@@ -84,7 +83,8 @@ class Settings(BaseSettings):
     # EMBEDDING_MODEL: str = "mixedbread-ai/mxbai-embed-large-v1"
     EMBEDDING_MODEL: str = "intfloat/e5-large-v2"
     WEAVIATE_STORAGE_INDEX_NAME: str = "AgenticRAG"
-    DATA_TO_INDEX: str = "data"
+    # Path to the data to index (local directory or S3/GCS bucket)
+    DATA_TO_INDEX: str = "s3://agentic-rag-ingestion-data-051025/data/"
 
     # --- OpenAI Settings ---
     OPENAI_MAIN_MODEL_NAME: str = "gpt-4.1-mini"
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
 
     # --- AWS Specific Settings ---
     AWS_SECRET_NAME: str = "agentic-rag/api_keys"
-    AWS_REGION: str = "us-east-1" # Or your preferred region
+    AWS_REGION: str = "us-east-1"  # Or your preferred region
 
     # --- GCP Specific Settings ---
     GCP_PROJECT_ID: str = "agentic-rag-system-473914"
@@ -165,7 +165,9 @@ def load_settings() -> Settings:
 
     if base_settings.APP_ENVIRONMENT == "production":
         cloud_provider = base_settings.CLOUD_PROVIDER
-        logger.info(f"Production environment detected. Using cloud provider: {cloud_provider}")
+        logger.info(
+            f"Production environment detected. Using cloud provider: {cloud_provider}"
+        )
 
         secrets = {}
         try:
@@ -180,7 +182,9 @@ def load_settings() -> Settings:
                     secret_id=base_settings.GCP_SECRET_ID,
                 )
             else:
-                logger.warning("Running in production mode without a specified cloud provider. Using default settings.")
+                logger.warning(
+                    "Running in production mode without a specified cloud provider. Using default settings."
+                )
                 return base_settings
 
             return Settings(**secrets)
@@ -189,8 +193,11 @@ def load_settings() -> Settings:
             logger.critical(f"Failed to load settings from {cloud_provider}: {e}")
             raise
     else:
-        logger.info("Development environment detected. Loading settings from .env file.")
+        logger.info(
+            "Development environment detected. Loading settings from .env file."
+        )
         return base_settings
+
 
 # Create a single, globally accessible settings object
 settings = load_settings()
